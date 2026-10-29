@@ -5,6 +5,9 @@
 //! Eigen's column-pivoting Householder QR. That solver is reproduced here step
 //! for step, including pivot choice, the column-norm downdate and the rank
 //! cut-off, so rank-deficient neighbourhoods behave as they do in FAST-LIO.
+//!
+//! Sums follow the order of Eigen's SIMD build (NEON or SSE), so the fit
+//! matches FAST-LIO's to the bit; see [`eigen_sum`].
 
 use crate::point::Point;
 
@@ -14,14 +17,31 @@ pub const NUM_MATCH_POINTS: usize = 5;
 const ROWS: usize = NUM_MATCH_POINTS;
 const COLS: usize = 3;
 
+/// A sum in the order Eigen's vectorised reductions use for `f32`: with four
+/// or more terms the first four are added as one packet and reduced pairwise,
+/// `(x0 + x2) + (x1 + x3)`, and the rest follow one by one; fewer than four
+/// are added in order. This holds for fixed and dynamic sizes alike up to the
+/// five terms used here.
+fn eigen_sum(terms: impl Iterator<Item = f32>) -> f32 {
+    let mut v = [0.0f32; ROWS];
+    let mut n = 0;
+    for t in terms {
+        v[n] = t;
+        n += 1;
+    }
+    if n < 4 {
+        return v[..n].iter().copied().reduce(|a, b| a + b).unwrap_or(0.0);
+    }
+    v[4..n]
+        .iter()
+        .fold((v[0] + v[2]) + (v[1] + v[3]), |a, b| a + b)
+}
+
 /// Least-squares solution of `a·x = b` by Eigen's `ColPivHouseholderQR`, in `f32`.
 fn colpiv_qr_solve(mut qr: [[f32; COLS]; ROWS], b: [f32; ROWS]) -> [f32; COLS] {
     let eps = f32::EPSILON;
     let col_norm = |qr: &[[f32; COLS]; ROWS], c: usize, from: usize| {
-        (from..ROWS)
-            .map(|r| qr[r][c] * qr[r][c])
-            .sum::<f32>()
-            .sqrt()
+        eigen_sum((from..ROWS).map(|r| qr[r][c] * qr[r][c])).sqrt()
     };
 
     let mut norms_direct = [0.0f32; COLS];
@@ -60,7 +80,7 @@ fn colpiv_qr_solve(mut qr: [[f32; COLS]; ROWS], b: [f32; ROWS]) -> [f32; COLS] {
 
         // makeHouseholderInPlace on column k, rows k..
         let c0 = qr[k][k];
-        let tail_sq: f32 = (k + 1..ROWS).map(|r| qr[r][k] * qr[r][k]).sum();
+        let tail_sq = eigen_sum((k + 1..ROWS).map(|r| qr[r][k] * qr[r][k]));
         let (tau, beta) = if tail_sq <= f32::MIN_POSITIVE {
             for row in qr.iter_mut().skip(k + 1) {
                 row[k] = 0.0;
@@ -136,7 +156,7 @@ fn apply_householder_col(qr: &mut [[f32; COLS]; ROWS], k: usize, j: usize, tau: 
     if ROWS - k == 1 {
         qr[k][j] *= 1.0 - tau;
     } else if tau != 0.0 {
-        let mut tmp: f32 = (k + 1..ROWS).map(|r| qr[r][k] * qr[r][j]).sum();
+        let mut tmp = eigen_sum((k + 1..ROWS).map(|r| qr[r][k] * qr[r][j]));
         tmp += qr[k][j];
         qr[k][j] -= tau * tmp;
         for row in qr.iter_mut().skip(k + 1) {
@@ -149,7 +169,7 @@ fn apply_householder_vec(c: &mut [f32; ROWS], k: usize, essential: &[f32], tau: 
     if ROWS - k == 1 {
         c[k] *= 1.0 - tau;
     } else if tau != 0.0 {
-        let mut tmp: f32 = essential.iter().zip(&c[k + 1..]).map(|(e, v)| e * v).sum();
+        let mut tmp = eigen_sum(essential.iter().zip(&c[k + 1..]).map(|(e, v)| e * v));
         tmp += c[k];
         c[k] -= tau * tmp;
         for (v, e) in c[k + 1..].iter_mut().zip(essential) {

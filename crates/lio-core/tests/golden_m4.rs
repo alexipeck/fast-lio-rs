@@ -64,30 +64,23 @@ fn worst_err(got: &[f64], want: &[f64]) -> f64 {
 /// which catches any systematic error.
 #[test]
 fn plane_fit() {
-    let mut errs = Vec::new();
+    let mut accepted = 0;
     for (i, c) in golden()["plane"].as_array().unwrap().iter().enumerate() {
         let pts = points(&c["points"]);
         let got = esti_plane(&pts, 0.1);
         let ok = c["ok"].as_bool().unwrap();
         assert_eq!(got.is_some(), ok, "plane[{i}]: accept decision");
         if let Some(abcd) = got {
-            let err = worst_err(&abcd.map(f64::from), &nums(&c["abcd"]));
-            assert!(
-                err < 3e-4,
-                "plane[{i}]: {abcd:?} vs {:?} (err {err:e})",
-                nums(&c["abcd"])
+            // The sums follow Eigen's SIMD order, so the fit is bit-identical.
+            assert_eq!(
+                abcd.map(f64::from).to_vec(),
+                nums(&c["abcd"]),
+                "plane[{i}]: plane coefficients"
             );
-            errs.push(err);
+            accepted += 1;
         }
     }
-    errs.sort_by(f64::total_cmp);
-    let median = errs[errs.len() / 2];
-    eprintln!(
-        "plane_fit: {} accepted, median rel err {median:e}, worst {:e}",
-        errs.len(),
-        errs[errs.len() - 1]
-    );
-    assert!(median < 5e-6, "plane_fit median relative error {median:e}");
+    eprintln!("plane_fit: {accepted} accepted, all bit-identical");
 }
 
 #[test]

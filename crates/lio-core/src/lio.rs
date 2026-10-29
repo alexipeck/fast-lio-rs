@@ -475,8 +475,10 @@ fn h_share_model(
             *sel = false;
             let abcd = esti_plane(near, 0.1)?;
             let pd2 = abcd[0] * world.x + abcd[1] * world.y + abcd[2] * world.z + abcd[3];
-            let score = 1.0 - 0.9 * f64::from(pd2.abs()) / p_body.norm().sqrt();
-            if score > 0.9 {
+            // `float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm())`: computed in
+            // double, stored as float, compared in double.
+            let score = (1.0 - 0.9 * f64::from(pd2.abs()) / p_body.norm().sqrt()) as f32;
+            if f64::from(score) > 0.9 {
                 *sel = true;
                 Some(([abcd[0], abcd[1], abcd[2]], pd2))
             } else {

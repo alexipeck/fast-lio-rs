@@ -41,7 +41,27 @@ These don't change anything the algorithm can observe: map contents, search resu
 - **ikd-Tree rebuilds in place.** FAST-LIO hands subtrees of 1500 or more points to a background thread and replays the operations logged meanwhile. Here they are rebuilt synchronously. Only timing and tree shape differ.
 - **ikd-Tree k-nearest search doesn't push down lazy deletion labels.** Pending labels only exist inside subtrees already marked fully deleted, which the search never enters. The search can therefore take `&self` and run in parallel.
 - **ikd-Tree nodes live in an index-addressed arena,** not behind raw pointers.
-- **Voxel downsampling sorts stably.** PCL uses an unstable spreadsort, so within a voxel the order points are summed in, and the last bit of a centroid, is unspecified even in C++.
-- **Linear algebra is hand-written** to Eigen's formulas. The reference fixtures are built with `-ffp-contract=off`, because GCC fuses multiply-adds on aarch64 by default and Rust never does. With that, plane fits and k-nearest distances match bit for bit.
+- **Linear algebra is hand-written** to Eigen's formulas. The reference fixtures are built with `-ffp-contract=off`, because GCC fuses multiply-adds on aarch64 by default and Rust never does.
 - **The correspondence search runs on all cores** (`rayon`). FAST-LIO's CMake enables its OpenMP loop only on x86. Results are gathered in index order, as the C++ does after its loop, so the output doesn't depend on thread count.
 - **`ImuProcess::last_lidar_end_time_` starts at 0.** The C++ never initialises it. FAST-LIO's global instance gets fresh, zeroed memory at startup, so it reads 0 in practice.
+
+## Floating-point differences
+
+The port evaluates FAST-LIO's arithmetic in the C++'s order and precision, including the order in which Eigen's SIMD build (NEON or SSE) sums inside the plane fit. Single-precision plane fits, residuals, world points and k-nearest distances are bit-identical. Two things are not, both below the last bit:
+
+- **Points inside a voxel are summed in arrival order.** PCL 1.12 sorts points by voxel with Boost's spreadsort, which is unstable. The order a voxel's points are summed in, and so the last bit of its centroid, is therefore unspecified even in C++. Here the sort is stable.
+- **No fused multiply-adds.** Eigen's NEON kernels fuse multiply-adds inside some double-precision products, whatever the compiler flags. The double-precision state therefore agrees to about 1e-16 relative, not to the bit.
+
+On the first real capture these are the only differences. They matter only because the data is chaotically sensitive: a last-bit change eventually moves one point across a threshold, and the paths drift apart from there. FAST-LIO itself shows the same spread when only its voxel order changes:
+
+| Settings | Compared | Point counts identical through | Furthest apart | Ends apart |
+|---|---|---|---|---|
+| JT128 (voxels 0.25 m) | Port against C++ with a stable voxel sort | frame 148 (15 s) | 6.9 mm | 3.1 mm |
+| | Port against C++ as shipped | frame 6 | 12 mm | 4.2 mm |
+| | C++ as shipped against C++ with a stable voxel sort | frame 6 | 12 mm | 3.1 mm |
+| Mid-360 (voxels 0.5 m) | Port against C++ with a stable voxel sort | frame 480 (48 s) | 109 mm | 102 mm |
+| | Port against C++ as shipped | frame 477 | 158 mm | 149 mm |
+| | C++ as shipped against C++ with a stable voxel sort | frame 477 | 102 mm | 56 mm |
+
+All runs: `room-2.pcap`, 1,037 frames over 104 s, `blind` 1.0, 180° extrinsic, the same recorded input (`--dump-input`) for both implementations. The stable-sort C++ is the fixtures image with one line of PCL's `voxel_grid.hpp` changed to `std::stable_sort`, built with `PCL_NO_PRECOMPILE`.
+
