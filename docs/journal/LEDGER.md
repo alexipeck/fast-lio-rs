@@ -253,3 +253,17 @@ Continuation of the 01:39 entry above.
 - **test** — Ray computation takes 1.82 ms per 113k-point frame on all M4 cores (16 ns/point). Predict takes 3.7 µs.
 - **note** — Docker Hub pulls hung tonight for 15+ min at `load metadata for ubuntu:22.04`, although the registry answered HTTP. Builds were moved onto the existing local `fast-lio-rs-fixtures` image via derived Dockerfiles in the scratchpad; the committed Dockerfiles are unchanged.
 - **decision** — `ImuProcess::last_lidar_end_time_` is uninitialised in the C++. FAST-LIO's global instance gets zeroed memory, so the generator and harness construct it in zeroed static storage, and the Rust code starts it at 0.
+
+### 02:52 · Rust matches C++ FAST-LIO on the real capture
+`session 2a591fe4` · `main` @ `ef6fea7` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 02:47 entry above.
+
+- **test** — `run_fastlio`: FAST-LIO's `laserMapping.cpp` compiled unchanged, with `main` renamed out of the way, against the ROS stand-in. It was fed exactly the input the Rust run recorded (`--dump-input`).
+  - Settings: 180° extrinsic and `blind` 1.0, first 400 frames. Every frame's kind, downsampled count and matched-plane count are identical. Positions are within 0.0015 mm and rotations within 0.00004°.
+  - Same settings, full 1,037 frames: identical through frame 481. At frame 482 (about 48 s in) a one-point downsample difference appears (393 against 394). After that the paths drift apart to at most 186 mm (frame 835) and end 61 mm and 0.78° apart. Both stay inside the room.
+  - With `blind` 0.5, full capture: the C++ diverges too, ending 3.9 km from start against Rust's 10 km. They are identical through frame 478; the chaotic divergence starts at the same point.
+- **verdict → I was right** — The question was whether the fragility is in the port or in FAST-LIO. It is FAST-LIO's own behaviour on this handheld data. The port reproduces the C++ to float rounding until the trajectory hits a chaotically sensitive stretch, and the C++ itself diverges with the setting that made Rust diverge.
+- **test** — M5 golden tests (`ef6fea7`): undistorted points bit-identical, state and P within 8e-16. The 200-measurement update matches to 1.9e-10 and the 10-measurement update to 3e-14. Regenerating `m3` and `m4` from the rebuilt image gave byte-identical files.
+- **test** — The render of the ray output (every 20th ray turned back into points) shows a coherent room with the path inside it, but doubled walls. That is slow drift in this data. Hesai's *sample* angle file was used, because the unit's own file only arrives tomorrow.
+- **note** — The disk is 96% full (19 GB free). The recorded inputs (0.2–0.6 GB each) were deleted after use.
