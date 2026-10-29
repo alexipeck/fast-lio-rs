@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/jt128", "crates/lio-core", "crates/lio"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-2.0-only"
+publish = false
+
+[workspace.dependencies]
+jt128 = { path = "crates/jt128" }
+lio-core = { path = "crates/lio-core" }
+glam = "0.34"
+rayon = "1.12"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

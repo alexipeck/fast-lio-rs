@@ -1,0 +1,5 @@
+/target
+# Sensor recordings and calibration files stay out of git.
+/data/
+*.pcap
+*.pcapng

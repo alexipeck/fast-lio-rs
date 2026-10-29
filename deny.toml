@@ -1,0 +1,28 @@
+# Dependency policy, checked in CI with `cargo deny check`.
+#
+# This project is GPL-2.0-only, so every dependency has to be GPL-2.0-compatible.
+# The FSF treats Apache-2.0 on its own as incompatible with GPLv2, so it is not
+# allowed. Dual-licensed "MIT OR Apache-2.0" crates still pass, used under MIT.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib"]
+confidence-threshold = 0.93
+
+# Our own crates are unpublished and GPL-2.0-only.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
