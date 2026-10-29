@@ -8,12 +8,21 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::net::UdpSocket;
 use std::process::ExitCode;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
+use jt128::packet::PacketError;
 use jt128::pcap::PcapReader;
-use jt128::{AngleCorrection, DecoderConfig, Firetimes};
-use lio::{FrameResult, Pipeline, RayWriter, lidar_pose, write_pcd};
+use jt128::{AngleCorrection, Decoder, DecoderConfig, DecoderStats, Event, Firetimes};
+use lio::{Estimator, FrameResult, Processed, RayWriter, lidar_pose, write_pcd};
 use lio_core::lio::{FrameKind, LioConfig};
+
+/// Packets' worth of decoder events the decoding thread may run ahead of
+/// FAST-LIO. A frame is about 450 packets, and only packets that finish a
+/// frame or carry a new IMU sample produce events.
+const EVENT_QUEUE: usize = 256;
+/// Finished frames FAST-LIO may run ahead of the ray and output stage.
+const FRAME_QUEUE: usize = 4;
 
 const USAGE: &str = "\
 usage:
@@ -42,6 +51,13 @@ four JT128 values given here):
   --max-iteration <n> --point-filter-num <n> --det-range <m> --cube-side-length <m>
   --gyr-cov <v> --acc-cov <v> --b-gyr-cov <v> --b-acc-cov <v>
   --max-frames <n>                   stop after n frames
+
+performance:
+  --threads <n>          worker threads for FAST-LIO's matching, motion
+                         compensation and the rays (default: one per CPU).
+                         On big.LITTLE chips the number of big cores uses far
+                         less CPU for nearly the same speed. Decoding and
+                         FAST-LIO's serial steps run on two more threads.
 ";
 
 /// FAST-LIO's Mid-360 settings with the JT128's values where they differ,
@@ -70,6 +86,7 @@ struct Args {
     map: Option<String>,
     dump_input: Option<String>,
     max_frames: Option<usize>,
+    threads: Option<usize>,
     lio: LioConfig,
 }
 
@@ -100,6 +117,7 @@ fn parse_args() -> Result<Args, String> {
         map: None,
         dump_input: None,
         max_frames: None,
+        threads: None,
         lio: jt128_defaults(),
     };
     if mode == "replay" {
@@ -126,6 +144,7 @@ fn parse_args() -> Result<Args, String> {
             "--map" => a.map = Some(v),
             "--dump-input" => a.dump_input = Some(v),
             "--max-frames" => a.max_frames = Some(num()? as usize),
+            "--threads" => a.threads = Some((num()? as usize).max(1)),
             "--extrinsic-r" => a.lio.extrinsic_r = floats::<9>(&v)?,
             "--extrinsic-t" => a.lio.extrinsic_t = floats::<3>(&v)?,
             "--time-offset" => a.lio.time_offset_lidar_to_imu = num()?,
@@ -157,6 +176,9 @@ struct Outputs {
     path: Option<BufWriter<File>>,
     frames: Option<BufWriter<File>>,
     counts: [usize; 5],
+    frame_count: usize,
+    /// Sensor time from the first frame's start to the last frame's end.
+    span: Option<(f64, f64)>,
     rays_total: usize,
     first_pos: Option<[f64; 3]>,
     last_pos: [f64; 3],
@@ -190,6 +212,8 @@ impl Outputs {
             path: create(&a.path)?,
             frames,
             counts: [0; 5],
+            frame_count: 0,
+            span: None,
             rays_total: 0,
             first_pos: None,
             last_pos: [0.0; 3],
@@ -198,8 +222,13 @@ impl Outputs {
         })
     }
 
-    fn record(&mut self, index: usize, r: &FrameResult, proc_ms: f64) -> std::io::Result<()> {
+    fn record(&mut self, r: &FrameResult, proc_ms: f64) -> std::io::Result<()> {
         let o = &r.output;
+        let index = self.frame_count;
+        self.frame_count += 1;
+        self.span
+            .get_or_insert((o.lidar_beg_time, o.lidar_end_time))
+            .1 = o.lidar_end_time;
         self.counts[lio::kind_code(o.kind) as usize] += 1;
         self.rays_total += r.rays.len();
         if let Some(w) = self.rays.as_mut() {
@@ -271,67 +300,44 @@ impl Outputs {
     }
 }
 
-fn run(a: Args) -> Result<(), String> {
-    let angles = AngleCorrection::parse(
-        &std::fs::read_to_string(&a.angles).map_err(|e| format!("{}: {e}", a.angles))?,
-    )
-    .map_err(|e| e.to_string())?;
-    let firetimes = match &a.firetimes {
-        Some(p) => Some(
-            Firetimes::parse(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
-                .map_err(|e| e.to_string())?,
-        ),
-        None => None,
-    };
-    let mut pipe = Pipeline::new(
-        &angles,
-        firetimes.as_ref(),
-        DecoderConfig::default(),
-        a.lio.clone(),
-    );
-    if let Some(p) = &a.dump_input {
-        pipe.dump_input_to(Box::new(BufWriter::new(
-            File::create(p).map_err(|e| format!("{p}: {e}"))?,
-        )));
-    }
-    let mut outputs = Outputs::open(&a).map_err(|e| e.to_string())?;
-    let mut results = Vec::new();
-    let (mut frame_index, mut busy) = (0usize, Duration::ZERO);
-    let wall = Instant::now();
-    let mut sensor_span: Option<(f64, f64)> = None;
+/// The decoding thread's end of the pipeline: payloads in, events sent on.
+struct Source<'a> {
+    decoder: &'a mut Decoder,
+    events: Vec<Event>,
+    tx: SyncSender<Vec<Event>>,
+    busy: Duration,
+}
 
-    let mut handle = |pipe: &mut Pipeline, payload: Option<&[u8]>| -> Result<bool, String> {
+impl Source<'_> {
+    /// Decodes one payload, or flushes the frame in progress at the end, and
+    /// sends the events on. Returns false once the estimator has stopped.
+    fn push(&mut self, payload: Option<&[u8]>) -> Result<bool, String> {
         let t = Instant::now();
         match payload {
             Some(p) => {
-                if let Err(e) = pipe.push_packet(p, &mut results) {
+                if let Err(e) = self.decoder.push(p, &mut self.events) {
                     // Non-point datagrams (fault messages) share the port; skip them.
-                    if !matches!(e, jt128::packet::PacketError::NotPointCloud) {
+                    if !matches!(e, PacketError::NotPointCloud) {
                         return Err(e.to_string());
                     }
                 }
             }
-            None => pipe.finish(&mut results),
+            None => self.decoder.flush(&mut self.events),
         }
-        let dt = t.elapsed();
-        busy += dt;
-        let per_frame = if results.is_empty() {
-            0.0
-        } else {
-            dt.as_secs_f64() * 1e3 / results.len() as f64
-        };
-        for r in results.drain(..) {
-            let span =
-                sensor_span.get_or_insert((r.output.lidar_beg_time, r.output.lidar_end_time));
-            span.1 = r.output.lidar_end_time;
-            outputs
-                .record(frame_index, &r, per_frame)
-                .map_err(|e| e.to_string())?;
-            frame_index += 1;
-        }
-        Ok(a.max_frames.is_some_and(|m| frame_index >= m))
-    };
+        self.busy += t.elapsed();
+        Ok(self.events.is_empty() || self.tx.send(std::mem::take(&mut self.events)).is_ok())
+    }
+}
 
+/// Reads the capture or the socket and decodes every packet. Runs on its own
+/// thread; returns the time spent decoding.
+fn decode(a: &Args, decoder: &mut Decoder, tx: SyncSender<Vec<Event>>) -> Result<Duration, String> {
+    let mut src = Source {
+        decoder,
+        events: Vec::new(),
+        tx,
+        busy: Duration::ZERO,
+    };
     match a.mode.as_str() {
         "replay" => {
             let path = a.capture.as_ref().unwrap();
@@ -339,8 +345,8 @@ fn run(a: Args) -> Result<(), String> {
             let mut reader = PcapReader::new(BufReader::with_capacity(1 << 20, file))
                 .map_err(|e| e.to_string())?;
             while let Some(pkt) = reader.next_udp().map_err(|e| e.to_string())? {
-                if handle(&mut pipe, Some(pkt.payload))? {
-                    break;
+                if !src.push(Some(pkt.payload))? {
+                    return Ok(src.busy);
                 }
             }
         }
@@ -356,11 +362,12 @@ fn run(a: Args) -> Result<(), String> {
                 a.bind,
                 limit.as_secs_f64()
             );
-            while wall.elapsed() < limit {
+            let start = Instant::now();
+            while start.elapsed() < limit {
                 match socket.recv_from(&mut buf) {
                     Ok((n, _)) => {
-                        if handle(&mut pipe, Some(&buf[..n]))? {
-                            break;
+                        if !src.push(Some(&buf[..n]))? {
+                            return Ok(src.busy);
                         }
                     }
                     Err(e)
@@ -373,30 +380,145 @@ fn run(a: Args) -> Result<(), String> {
             }
         }
     }
-    handle(&mut pipe, None)?;
+    src.push(None)?;
+    Ok(src.busy)
+}
+
+/// FAST-LIO on the decoder's events, in order, on its own thread. Each
+/// finished frame goes on with the milliseconds FAST-LIO spent on it.
+fn estimate(
+    estimator: &mut Estimator,
+    events: Receiver<Vec<Event>>,
+    frames: SyncSender<(Processed, f64)>,
+) {
+    let mut done = Vec::new();
+    for event in events.into_iter().flatten() {
+        let t = Instant::now();
+        estimator.process(event, &mut done);
+        let ms = t.elapsed().as_secs_f64() * 1e3 / done.len().max(1) as f64;
+        for p in done.drain(..) {
+            if frames.send((p, ms)).is_err() {
+                return; // the output stage has stopped
+            }
+        }
+    }
+}
+
+/// The rays and every output, on the calling thread, until FAST-LIO is done
+/// or `--max-frames` is reached. Returns the time spent on rays and on
+/// writing.
+fn write_outputs(
+    a: &Args,
+    outputs: &mut Outputs,
+    frames: Receiver<(Processed, f64)>,
+) -> Result<(Duration, Duration), String> {
+    let (mut rays, mut writing) = (Duration::ZERO, Duration::ZERO);
+    for (p, lio_ms) in frames {
+        let t = Instant::now();
+        let r = p.rays();
+        let dt = t.elapsed();
+        rays += dt;
+        let t = Instant::now();
+        outputs
+            .record(&r, lio_ms + dt.as_secs_f64() * 1e3)
+            .map_err(|e| e.to_string())?;
+        writing += t.elapsed();
+        if a.max_frames.is_some_and(|m| outputs.frame_count >= m) {
+            break;
+        }
+    }
+    Ok((rays, writing))
+}
+
+fn run(a: Args) -> Result<(), String> {
+    if let Some(n) = a.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .map_err(|e| e.to_string())?;
+    }
+    let angles = AngleCorrection::parse(
+        &std::fs::read_to_string(&a.angles).map_err(|e| format!("{}: {e}", a.angles))?,
+    )
+    .map_err(|e| e.to_string())?;
+    let firetimes = match &a.firetimes {
+        Some(p) => Some(
+            Firetimes::parse(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
+                .map_err(|e| e.to_string())?,
+        ),
+        None => None,
+    };
+    let mut decoder = Decoder::new(&angles, firetimes.as_ref(), DecoderConfig::default());
+    let mut estimator = Estimator::new(a.lio.clone());
+    if let Some(p) = &a.dump_input {
+        estimator.dump_input_to(Box::new(BufWriter::new(
+            File::create(p).map_err(|e| format!("{p}: {e}"))?,
+        )));
+    }
+    let mut outputs = Outputs::open(&a).map_err(|e| e.to_string())?;
+
+    // Three stages, each on its own thread, joined by bounded queues: decoding,
+    // FAST-LIO, then rays and outputs. Each stage sees the same items in the
+    // same order as with `Pipeline`, so the results are the same.
+    let wall = Instant::now();
+    let (event_tx, event_rx) = sync_channel(EVENT_QUEUE);
+    let (frame_tx, frame_rx) = sync_channel(FRAME_QUEUE);
+    let (decoding, written) = std::thread::scope(|scope| {
+        let decoding = scope.spawn(|| decode(&a, &mut decoder, event_tx));
+        let estimating = scope.spawn(|| estimate(&mut estimator, event_rx, frame_tx));
+        // Returning drops `frame_rx`; the upstream stages then stop early if
+        // they are still running.
+        let written = write_outputs(&a, &mut outputs, frame_rx);
+        estimating.join().expect("FAST-LIO thread panicked");
+        (decoding.join().expect("decoder thread panicked"), written)
+    });
+    let (decoding, (rays_busy, writing)) = (decoding?, written?);
+    let wall = wall.elapsed();
 
     if let Some(p) = &a.map {
-        let points = pipe.lio_mut().tree.flatten();
+        let points = estimator.lio_mut().tree.flatten();
         let mut w = BufWriter::new(File::create(p).map_err(|e| format!("{p}: {e}"))?);
         write_pcd(&mut w, &points).map_err(|e| e.to_string())?;
     }
-    let s = pipe.decoder_stats().clone();
+    let s: &DecoderStats = &decoder.stats;
     let c = outputs.counts;
-    let span = sensor_span.map_or(0.0, |(b, e)| e - b);
     eprintln!(
         "decoded {} packets ({} spin-up, {} sequence gaps), {} IMU samples ({} recovered)",
         s.packets, s.spinup_packets, s.sequence_gaps, s.imu_samples, s.imu_samples_split
     );
     eprintln!(
-        "frames: {frame_index} (first {}, IMU init {}, map init {}, updated {}, skipped {}); rays: {}",
-        c[0], c[1], c[2], c[3], c[4], outputs.rays_total
+        "frames: {} (first {}, IMU init {}, map init {}, updated {}, skipped {}); rays: {}",
+        outputs.frame_count, c[0], c[1], c[2], c[3], c[4], outputs.rays_total
     );
+    let span = outputs.span.map_or(0.0, |(b, e)| e - b);
+    let lio_busy = estimator.busy();
+    let secs = |d: Duration| d.as_secs_f64();
+    if a.mode == "replay" {
+        eprintln!(
+            "processing: {:.2} s for {:.2} s of data ({:.1}x real time); map holds {} points",
+            secs(wall),
+            span,
+            span / secs(wall).max(1e-9),
+            estimator.lio().tree.valid_num()
+        );
+    } else {
+        // Live, the wall time is the listening time; what matters is how much
+        // of it the busiest stage needed.
+        let busiest = decoding.max(lio_busy).max(rays_busy + writing);
+        eprintln!(
+            "processing: {:.2} s of data in {:.2} s of listening; the busiest stage kept up with {:.1}x headroom; map holds {} points",
+            span,
+            secs(wall),
+            span / secs(busiest).max(1e-9),
+            estimator.lio().tree.valid_num()
+        );
+    }
     eprintln!(
-        "processing: {:.2} s for {:.2} s of data ({:.1}x real time); map holds {} points",
-        busy.as_secs_f64(),
-        span,
-        span / busy.as_secs_f64().max(1e-9),
-        pipe.lio().tree.valid_num()
+        "  busy: decoding {:.2} s, FAST-LIO {:.2} s, rays {:.2} s and writing {:.2} s, on three threads",
+        secs(decoding),
+        secs(lio_busy),
+        secs(rays_busy),
+        secs(writing)
     );
     eprintln!(
         "path: {:.2} m travelled, furthest {:.2} m from start, ends at [{:.3}, {:.3}, {:.3}]",

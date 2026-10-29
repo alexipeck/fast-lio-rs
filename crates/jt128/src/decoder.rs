@@ -73,7 +73,9 @@ pub struct DecoderStats {
 
 struct ChannelCalib {
     azimuth: i32,
-    elevation: i32,
+    /// sin and cos of the elevation, which is fixed per channel.
+    sin_el: f32,
+    cos_el: f32,
     firetime_ns: i32,
 }
 
@@ -98,10 +100,15 @@ impl Decoder {
         cfg: DecoderConfig,
     ) -> Self {
         let channels = (0..CHANNELS)
-            .map(|ch| ChannelCalib {
-                azimuth: double_to_int(f64::from(angles.azimuth[ch] * FINE as f32)),
-                elevation: double_to_int(f64::from(angles.elevation[ch] * FINE as f32)),
-                firetime_ns: firetimes.map_or(0, |f| f.ns[ch]),
+            .map(|ch| {
+                let elevation = double_to_int(f64::from(angles.elevation[ch] * FINE as f32));
+                let (sin_el, cos_el) = sin_cos(circle_revise(elevation));
+                ChannelCalib {
+                    azimuth: double_to_int(f64::from(angles.azimuth[ch] * FINE as f32)),
+                    sin_el,
+                    cos_el,
+                    firetime_ns: firetimes.map_or(0, |f| f.ns[ch]),
+                }
             })
             .collect();
         let start = cfg.frame_start_azimuth;
@@ -193,10 +200,8 @@ impl Decoder {
                     azimuth += (sign * f64::from(double_to_int(corr_deg * f64::from(FINE)))) as i32;
                 }
                 azimuth = circle_revise(azimuth + c.azimuth);
-                let elevation = circle_revise(c.elevation);
-                let (sin_el, cos_el) = sin_cos(elevation);
                 let (sin_az, cos_az) = sin_cos(azimuth);
-                let xy = distance * cos_el;
+                let xy = distance * c.cos_el;
                 let t_ns = t_pkt_us * 1000
                     + if self.have_firetimes {
                         block_offset + i64::from(c.firetime_ns)
@@ -206,7 +211,7 @@ impl Decoder {
                 let point = Point {
                     x: xy * sin_az,
                     y: xy * cos_az,
-                    z: distance * sin_el,
+                    z: distance * c.sin_el,
                     intensity: f32::from(refl),
                     dt_ms: 0.0,
                     range: distance,

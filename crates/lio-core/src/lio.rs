@@ -209,8 +209,10 @@ impl Lio {
             return false;
         }
         if !self.lidar_pushed {
-            let (beg, cloud) = self.lidar_buffer.front().unwrap();
-            self.meas.lidar = cloud.clone();
+            // The cloud moves rather than copies; the emptied entry is popped
+            // below once the IMU covers the frame, as FAST-LIO pops its pointer.
+            let (beg, cloud) = self.lidar_buffer.front_mut().unwrap();
+            self.meas.lidar = std::mem::take(cloud);
             self.meas.lidar_beg_time = *beg;
             let last_ms = self
                 .meas

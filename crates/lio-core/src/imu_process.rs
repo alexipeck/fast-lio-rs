@@ -3,6 +3,8 @@
 //! propagation at every IMU sample (the frame's motion timeline) and the
 //! backward motion compensation of each point into the end-of-frame body.
 
+use rayon::prelude::*;
+
 use crate::esekf::Esekf;
 use crate::imu_init::{G_M_S2, ImuInit, ImuMeasurement};
 use crate::mat::{Mat3, Vec3};
@@ -226,43 +228,162 @@ impl ImuProcess {
     }
 }
 
-/// The backward compensation loop of `UndistortPcl`, kept to its exact shape:
-/// points walk back from the newest, each segment's points use its head pose,
-/// and points not later than the first pose stay as they are.
+/// The backward compensation loop of `UndistortPcl`. The C++ walks the points
+/// back from the newest: each segment's points use its head pose, and points
+/// not later than the first pose stay as they are. Once the walk reaches the
+/// first point it stays there, so that point is compensated again for every
+/// earlier segment whose head it is later than.
+///
+/// The walk is replayed here on times alone, to find the segment, or for the
+/// first point the segments, each point gets. Every point is then compensated
+/// on its own, in parallel, with the same arithmetic in the same order.
 fn compensate(pcl: &mut [Point], poses: &[TimelinePose], end: &State) {
     if pcl.is_empty() {
         return;
     }
+    // Tail pose of each point's segment; 0 leaves the point as it is.
+    let mut segment = vec![0usize; pcl.len()];
+    let mut first_again = Vec::new();
     let mut i = pcl.len() - 1;
     for k in (1..poses.len()).rev() {
         let head = &poses[k - 1];
-        let tail = &poses[k];
         loop {
-            let t = f64::from(pcl[i].curvature) / 1000.0;
-            if t <= head.offset_time {
+            if f64::from(pcl[i].curvature) / 1000.0 <= head.offset_time {
                 break;
             }
-            let dt = t - head.offset_time;
-            let r_i = head.rot * exp_rate(&tail.gyr, dt);
-            let p_i = Vec3::new(
-                f64::from(pcl[i].x),
-                f64::from(pcl[i].y),
-                f64::from(pcl[i].z),
-            );
-            let t_ei = head.pos + head.vel * dt + tail.acc * 0.5 * dt * dt - end.pos;
-            let in_imu = end.offset_r_l_i.rotate(&p_i) + end.offset_t_l_i;
-            let world_rel = r_i * in_imu + t_ei;
-            let p_c = end
-                .offset_r_l_i
-                .conjugate()
-                .rotate(&(end.rot.conjugate().rotate(&world_rel) - end.offset_t_l_i));
-            pcl[i].x = p_c[0] as f32;
-            pcl[i].y = p_c[1] as f32;
-            pcl[i].z = p_c[2] as f32;
             if i == 0 {
+                if segment[0] == 0 {
+                    segment[0] = k;
+                } else {
+                    first_again.push(k);
+                }
                 break;
             }
+            segment[i] = k;
             i -= 1;
+        }
+    }
+    pcl.par_iter_mut()
+        .zip(segment.par_iter())
+        .filter(|(_, k)| **k > 0)
+        .for_each(|(p, &k)| compensate_point(p, &poses[k - 1], &poses[k], end));
+    for k in first_again {
+        compensate_point(&mut pcl[0], &poses[k - 1], &poses[k], end);
+    }
+}
+
+/// Moves one point, measured during the segment from `head` to `tail`, into
+/// the end-of-frame LiDAR frame.
+fn compensate_point(p: &mut Point, head: &TimelinePose, tail: &TimelinePose, end: &State) {
+    let dt = f64::from(p.curvature) / 1000.0 - head.offset_time;
+    let r_i = head.rot * exp_rate(&tail.gyr, dt);
+    let p_i = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+    let t_ei = head.pos + head.vel * dt + tail.acc * 0.5 * dt * dt - end.pos;
+    let in_imu = end.offset_r_l_i.rotate(&p_i) + end.offset_t_l_i;
+    let world_rel = r_i * in_imu + t_ei;
+    let p_c = end
+        .offset_r_l_i
+        .conjugate()
+        .rotate(&(end.rot.conjugate().rotate(&world_rel) - end.offset_t_l_i));
+    p.x = p_c[0] as f32;
+    p.y = p_c[1] as f32;
+    p.z = p_c[2] as f32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::so3;
+
+    /// The C++ loop as written, one point after another.
+    fn compensate_serial(pcl: &mut [Point], poses: &[TimelinePose], end: &State) {
+        if pcl.is_empty() {
+            return;
+        }
+        let mut i = pcl.len() - 1;
+        for k in (1..poses.len()).rev() {
+            loop {
+                if f64::from(pcl[i].curvature) / 1000.0 <= poses[k - 1].offset_time {
+                    break;
+                }
+                compensate_point(&mut pcl[i], &poses[k - 1], &poses[k], end);
+                if i == 0 {
+                    break;
+                }
+                i -= 1;
+            }
+        }
+    }
+
+    /// xorshift64, uniform in [-1, 1).
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 52) as f64 - 1.0
+        }
+
+        fn vec(&mut self, scale: f64) -> Vec3 {
+            Vec3::new(self.next(), self.next(), self.next()) * scale
+        }
+    }
+
+    #[test]
+    fn parallel_compensation_matches_the_serial_walk() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let end = State {
+            pos: rng.vec(2.0),
+            rot: so3::exp(&rng.vec(1.0), 1.0),
+            offset_r_l_i: so3::exp(&rng.vec(1.0), 1.0),
+            offset_t_l_i: rng.vec(0.1),
+            ..State::default()
+        };
+        // Pose offsets in ms, and the first point's time in ms.
+        let cases: [(&[f64], f64); 5] = [
+            // A usual frame: the first point at the start.
+            (&[0.0, 5.0, 10.0, 15.0], 0.0),
+            // The first point is later than three poses, so the C++ loop
+            // compensates it three times.
+            (&[0.0, 0.002, 0.004, 5.0], 1.0),
+            // An IMU sample just before the frame start.
+            (&[0.0, -1.0, 4.0, 9.0], 0.5),
+            // A single pose: nothing moves.
+            (&[0.0], 0.0),
+            // Points before the first pose stay as they are.
+            (&[0.0, 5.0], -1.0),
+        ];
+        for (offsets_ms, first_ms) in cases {
+            let poses: Vec<TimelinePose> = offsets_ms
+                .iter()
+                .map(|ms| TimelinePose {
+                    offset_time: ms / 1000.0,
+                    acc: rng.vec(3.0),
+                    gyr: rng.vec(2.0),
+                    vel: rng.vec(1.0),
+                    pos: rng.vec(1.0),
+                    rot: so3::exp(&rng.vec(1.0), 1.0).to_matrix(),
+                })
+                .collect();
+            let mut points: Vec<Point> = (0..2000)
+                .map(|j| {
+                    let v = rng.vec(20.0);
+                    Point {
+                        curvature: (first_ms + f64::from(j) * 0.01) as f32,
+                        ..Point::new(v[0] as f32, v[1] as f32, v[2] as f32)
+                    }
+                })
+                .collect();
+            let mut serial = points.clone();
+            compensate_serial(&mut serial, &poses, &end);
+            compensate(&mut points, &poses, &end);
+            for (a, b) in points.iter().zip(&serial) {
+                for (u, v) in [(a.x, b.x), (a.y, b.y), (a.z, b.z)] {
+                    assert_eq!(u.to_bits(), v.to_bits(), "{offsets_ms:?}");
+                }
+            }
         }
     }
 }

@@ -4,9 +4,15 @@
 //! [`Pipeline`] chains the `jt128` decoder, FAST-LIO (`lio-core`) and the ray
 //! computation. Embed it in a processing pipeline by pushing each UDP payload
 //! as it arrives; every completed frame comes back with one ray per raw point.
+//!
+//! The stages can also run on separate threads: a [`Decoder`] turns payloads
+//! into [`Event`]s, an [`Estimator`] runs FAST-LIO on those events in order,
+//! and [`Processed::rays`] computes each finished frame's rays. The results
+//! are the same either way.
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use jt128::{AngleCorrection, Decoder, DecoderConfig, Event, Firetimes};
 use lio_core::imu_init::ImuMeasurement;
@@ -25,10 +31,8 @@ pub struct FrameResult {
 
 pub struct Pipeline {
     decoder: Decoder,
-    lio: Lio,
-    pending: VecDeque<jt128::Frame>,
+    estimator: Estimator,
     events: Vec<Event>,
-    input_dump: Option<Box<dyn Write>>,
 }
 
 impl Pipeline {
@@ -40,20 +44,14 @@ impl Pipeline {
     ) -> Self {
         Self {
             decoder: Decoder::new(angles, firetimes, decoder),
-            lio: Lio::new(lio),
-            pending: VecDeque::new(),
+            estimator: Estimator::new(lio),
             events: Vec::new(),
-            input_dump: None,
         }
     }
 
-    /// Records exactly what FAST-LIO is fed, for replaying through the C++
-    /// reference (`fixtures/src/run_fastlio.cpp`). Little-endian events: tag 1
-    /// is an IMU sample (`f64` t, acc×3, gyro×3); tag 2 is a preprocessed frame
-    /// (`f64` begin time, `u32` count, then `f32` x, y, z, intensity and
-    /// curvature per point).
-    pub fn dump_input_to(&mut self, w: Box<dyn Write>) {
-        self.input_dump = Some(w);
+    /// See [`Estimator::dump_input_to`].
+    pub fn dump_input_to(&mut self, w: Box<dyn Write + Send>) {
+        self.estimator.dump_input_to(w);
     }
 
     pub fn decoder_stats(&self) -> &jt128::DecoderStats {
@@ -61,11 +59,11 @@ impl Pipeline {
     }
 
     pub fn lio(&self) -> &Lio {
-        &self.lio
+        self.estimator.lio()
     }
 
     pub fn lio_mut(&mut self) -> &mut Lio {
-        &mut self.lio
+        self.estimator.lio_mut()
     }
 
     /// Feeds one UDP payload. Frames completed by it are appended to `out`.
@@ -88,74 +86,148 @@ impl Pipeline {
 
     fn drain(&mut self, out: &mut Vec<FrameResult>) {
         for event in self.events.drain(..) {
-            match event {
-                Event::Imu(s) => {
-                    if let Some(w) = self.input_dump.as_mut() {
-                        let mut rec = vec![1u8];
-                        for v in std::iter::once(s.t).chain(s.acc).chain(s.gyro) {
+            self.estimator.push_event(event, out);
+        }
+    }
+}
+
+/// A frame FAST-LIO has finished, before its rays are computed.
+pub struct Processed {
+    pub output: FrameOutput,
+    frame: jt128::Frame,
+}
+
+impl Processed {
+    /// Computes one ray per raw point of the frame.
+    pub fn rays(self) -> FrameResult {
+        let Self { output, frame } = self;
+        debug_assert_eq!(frame.t0, output.lidar_beg_time);
+        let raw: Vec<RawPoint> = frame
+            .points
+            .iter()
+            .map(|p| RawPoint {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                dt: f64::from(p.dt_ms) / 1000.0,
+                range: p.range,
+                intensity: p.intensity,
+            })
+            .collect();
+        let mut rays = Vec::with_capacity(raw.len());
+        frame_rays(
+            &raw,
+            frame.t0,
+            output.timeline.as_ref(),
+            &output.state,
+            &mut rays,
+        );
+        FrameResult { output, rays }
+    }
+}
+
+/// FAST-LIO on decoder events: events in, finished frames out.
+pub struct Estimator {
+    lio: Lio,
+    pending: VecDeque<jt128::Frame>,
+    input_dump: Option<Box<dyn Write + Send>>,
+    busy: Duration,
+    processed: Vec<Processed>,
+}
+
+impl Estimator {
+    pub fn new(lio: LioConfig) -> Self {
+        Self {
+            lio: Lio::new(lio),
+            pending: VecDeque::new(),
+            input_dump: None,
+            busy: Duration::ZERO,
+            processed: Vec::new(),
+        }
+    }
+
+    /// Time spent so far in FAST-LIO, rays excluded.
+    pub fn busy(&self) -> Duration {
+        self.busy
+    }
+
+    /// Records exactly what FAST-LIO is fed, for replaying through the C++
+    /// reference (`fixtures/src/run_fastlio.cpp`). Little-endian events: tag 1
+    /// is an IMU sample (`f64` t, acc×3, gyro×3); tag 2 is a preprocessed frame
+    /// (`f64` begin time, `u32` count, then `f32` x, y, z, intensity and
+    /// curvature per point).
+    pub fn dump_input_to(&mut self, w: Box<dyn Write + Send>) {
+        self.input_dump = Some(w);
+    }
+
+    pub fn lio(&self) -> &Lio {
+        &self.lio
+    }
+
+    pub fn lio_mut(&mut self) -> &mut Lio {
+        &mut self.lio
+    }
+
+    /// Feeds one decoder event. Frames it completes are appended to `out`,
+    /// with their rays.
+    pub fn push_event(&mut self, event: Event, out: &mut Vec<FrameResult>) {
+        let mut done = std::mem::take(&mut self.processed);
+        self.process(event, &mut done);
+        out.extend(done.drain(..).map(Processed::rays));
+        self.processed = done;
+    }
+
+    /// Feeds one decoder event. Frames it completes are appended to `out`;
+    /// their rays are left to [`Processed::rays`].
+    pub fn process(&mut self, event: Event, out: &mut Vec<Processed>) {
+        let t = Instant::now();
+        match event {
+            Event::Imu(s) => {
+                if let Some(w) = self.input_dump.as_mut() {
+                    let mut rec = vec![1u8];
+                    for v in std::iter::once(s.t).chain(s.acc).chain(s.gyro) {
+                        rec.extend_from_slice(&v.to_le_bytes());
+                    }
+                    w.write_all(&rec).expect("input dump write failed");
+                }
+                self.lio.push_imu(ImuMeasurement {
+                    t: s.t,
+                    acc: Vec3::from_array(s.acc),
+                    gyro: Vec3::from_array(s.gyro),
+                });
+            }
+            Event::Frame(f) => {
+                let points = f.points.iter().map(|p| Point {
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    intensity: p.intensity,
+                    curvature: p.dt_ms,
+                });
+                let kept = self.lio.preprocess(points);
+                if let Some(w) = self.input_dump.as_mut() {
+                    let mut rec = vec![2u8];
+                    rec.extend_from_slice(&f.t0.to_le_bytes());
+                    rec.extend_from_slice(&(kept.len() as u32).to_le_bytes());
+                    for p in &kept {
+                        for v in [p.x, p.y, p.z, p.intensity, p.curvature] {
                             rec.extend_from_slice(&v.to_le_bytes());
                         }
-                        w.write_all(&rec).expect("input dump write failed");
                     }
-                    self.lio.push_imu(ImuMeasurement {
-                        t: s.t,
-                        acc: Vec3::from_array(s.acc),
-                        gyro: Vec3::from_array(s.gyro),
-                    });
+                    w.write_all(&rec).expect("input dump write failed");
                 }
-                Event::Frame(f) => {
-                    let points = f.points.iter().map(|p| Point {
-                        x: p.x,
-                        y: p.y,
-                        z: p.z,
-                        intensity: p.intensity,
-                        curvature: p.dt_ms,
-                    });
-                    let kept = self.lio.preprocess(points);
-                    if let Some(w) = self.input_dump.as_mut() {
-                        let mut rec = vec![2u8];
-                        rec.extend_from_slice(&f.t0.to_le_bytes());
-                        rec.extend_from_slice(&(kept.len() as u32).to_le_bytes());
-                        for p in &kept {
-                            for v in [p.x, p.y, p.z, p.intensity, p.curvature] {
-                                rec.extend_from_slice(&v.to_le_bytes());
-                            }
-                        }
-                        w.write_all(&rec).expect("input dump write failed");
-                    }
-                    self.lio.push_preprocessed_frame(f.t0, kept);
-                    self.pending.push_back(f);
-                }
-            }
-            for output in self.lio.step() {
-                let frame = self
-                    .pending
-                    .pop_front()
-                    .expect("every processed frame was pushed");
-                debug_assert_eq!(frame.t0, output.lidar_beg_time);
-                let raw: Vec<RawPoint> = frame
-                    .points
-                    .iter()
-                    .map(|p| RawPoint {
-                        x: p.x,
-                        y: p.y,
-                        z: p.z,
-                        dt: f64::from(p.dt_ms) / 1000.0,
-                        range: p.range,
-                        intensity: p.intensity,
-                    })
-                    .collect();
-                let mut rays = Vec::with_capacity(raw.len());
-                frame_rays(
-                    &raw,
-                    frame.t0,
-                    output.timeline.as_ref(),
-                    &output.state,
-                    &mut rays,
-                );
-                out.push(FrameResult { output, rays });
+                self.lio.push_preprocessed_frame(f.t0, kept);
+                self.pending.push_back(f);
             }
         }
+        for output in self.lio.step() {
+            let frame = self
+                .pending
+                .pop_front()
+                .expect("every processed frame was pushed");
+            out.push(Processed { output, frame });
+        }
+        self.busy += t.elapsed();
     }
 }
 
@@ -174,6 +246,8 @@ pub fn lidar_pose(o: &FrameOutput) -> ([f64; 3], [f64; 4]) {
 pub struct RayWriter<W: Write> {
     w: W,
     stride: usize,
+    /// One frame's records, written in a single call.
+    buf: Vec<u8>,
 }
 
 pub const RAY_MAGIC: &[u8; 8] = b"LIORAYS1";
@@ -185,24 +259,28 @@ impl<W: Write> RayWriter<W> {
         Ok(Self {
             w,
             stride: stride.max(1),
+            buf: Vec::new(),
         })
     }
 
     pub fn write_frame(&mut self, r: &FrameResult) -> io::Result<()> {
         let kept = r.rays.len().div_ceil(self.stride);
-        self.w.write_all(&(kept as u32).to_le_bytes())?;
-        self.w.write_all(&r.output.lidar_beg_time.to_le_bytes())?;
-        self.w.write_all(&r.output.lidar_end_time.to_le_bytes())?;
-        self.w.write_all(&[kind_code(r.output.kind)])?;
+        let b = &mut self.buf;
+        b.clear();
+        b.reserve(21 + 40 * kept);
+        b.extend_from_slice(&(kept as u32).to_le_bytes());
+        b.extend_from_slice(&r.output.lidar_beg_time.to_le_bytes());
+        b.extend_from_slice(&r.output.lidar_end_time.to_le_bytes());
+        b.push(kind_code(r.output.kind));
         for ray in r.rays.iter().step_by(self.stride) {
-            self.w.write_all(&ray.t.to_le_bytes())?;
+            b.extend_from_slice(&ray.t.to_le_bytes());
             for v in ray.origin.iter().chain(&ray.direction) {
-                self.w.write_all(&v.to_le_bytes())?;
+                b.extend_from_slice(&v.to_le_bytes());
             }
-            self.w.write_all(&ray.range.to_le_bytes())?;
-            self.w.write_all(&ray.intensity.to_le_bytes())?;
+            b.extend_from_slice(&ray.range.to_le_bytes());
+            b.extend_from_slice(&ray.intensity.to_le_bytes());
         }
-        Ok(())
+        self.w.write_all(b)
     }
 
     pub fn into_inner(self) -> W {
