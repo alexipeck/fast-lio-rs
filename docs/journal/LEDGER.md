@@ -227,3 +227,29 @@ Continuation of the 01:28 entry above.
 
   The user's design plus the correction step is FAST-LIO. Per-point rays come from that timeline, anchored to the corrected end pose. With smooth motion, Point-LIO's advantages (aggressive motion, saturation, kHz-rate correction) aren't needed.
 - **decision** — Recommended continuing FAST-LIO in this repo, which is already through M3 and M4, and adding the ray output to M5. Point-LIO is deferred. Awaiting the user's confirmation.
+
+### 02:47 · Overnight run: decoder, full pipeline, rays, live mode
+`session 2a591fe4` · `main` @ `c3a27c1` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 01:39 entry above.
+
+- **decision** — User: "Yes, FAST-LIO". Then: "You will be left unattended for the night. I need you to get it done. Getting it done implies the entire thing." The outputs are as described before: a ray per point and the full path.
+- **test** — M2 decoder (`560f597`). The `room-2.pcap` integration test (ignored by default; the data stays local) passes:
+  - 466,361 packets, 0 sequence gaps, 66 spin-up packets dropped, 1,038 frames 100.32 ms apart.
+  - 20,795 IMU samples, 11 recovered from merged runs. Stationary acc (0.024, −0.003, 0.992) g.
+  - Decoded in 1.6 s for 104 s of data.
+  - The spin-up filter was tightened: the first and 66th packets each have one block at azimuth 0, so the rule is now "block step outside (0, 5°]", not "equal azimuths".
+- **test** — M5 pipeline (`c3a27c1`). The first full replay ran end to end at 9.9× real time and produced 114.6 M rays, but the path diverged to 13 km.
+  - The input really changes in the data, not because of a bug. Frames 1–2 have 113.5k returns; from frame 4, 25% of beams return nothing and about a quarter of returns fall within 0.5 m. Probably the operator standing next to the sensor.
+- **test** — IMU-to-LiDAR rotation sweep over the first 30 s, eight axis-aligned candidates: only a 180° turn about z (`-1,0,0,0,-1,0,0,0,1`) stays bounded (3.8 m furthest from start, median 31% of points matched). The others run hundreds to thousands of metres away with 5–14% matched.
+- **test** — Full 104 s with the 180° extrinsic:
+  - With `blind` 0.5 it still diverges at about 50 s.
+  - With `blind` 1.0 it stays bounded: 13.5 m travelled, 1.66 m furthest from start, ending 0.8 m from start.
+  - With 0.3 m voxels it is also bounded (9.9 m, 1.69 m).
+  - These diverge: `blind` 1.5, time offset ±5 ms, `point_filter_num` 1. Still to settle: whether the Rust port and the C++ diverge alike (C++ harness pending), or whether this data is on FAST-LIO's edge (operator in view, small room, fast hand motion).
+- **test** — Live mode against a local UDP replayer (`udp_replay.py`, localhost only; the sensor was not touched):
+  - 53,828 packets received with 0 gaps, 120 frames processed at 5.2× real time.
+  - It stopped itself at `--max-seconds`.
+- **test** — Ray computation takes 1.82 ms per 113k-point frame on all M4 cores (16 ns/point). Predict takes 3.7 µs.
+- **note** — Docker Hub pulls hung tonight for 15+ min at `load metadata for ubuntu:22.04`, although the registry answered HTTP. Builds were moved onto the existing local `fast-lio-rs-fixtures` image via derived Dockerfiles in the scratchpad; the committed Dockerfiles are unchanged.
+- **decision** — `ImuProcess::last_lidar_end_time_` is uninitialised in the C++. FAST-LIO's global instance gets zeroed memory, so the generator and harness construct it in zeroed static storage, and the Rust code starts it at 0.
