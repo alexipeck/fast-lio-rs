@@ -8,9 +8,9 @@ A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LI
 > - **Decoder:** reproduces Hesai's SDK point for point.
 > - **Filter and map:** fed the same input, it reproduces FAST-LIO's own C++ to the last bit in single precision and to about 1e-16 in double. On long runs, chaotic stretches of the data grow those last-bit differences to millimetres or centimetres. FAST-LIO shows the same spread against itself ([DEVIATIONS.md](DEVIATIONS.md#floating-point-differences)).
 > - **Rays, against ground truth:** a synthetic JT128-like run in a box room puts ray end points at a 10 mm median and 24 mm at worst. FAST-LIO's C++ gets the same trajectory from the same input.
-> - **Calibration:** uses Hesai's *sample* angle file until the unit's own is read out.
+> - **Calibration:** runs on the unit's own angle file, read from the sensor. With it, the IMU's axes are the LiDAR's.
 >
-> See [docs/plan.md](docs/plan.md) for what remains.
+> See [docs/plan.md](docs/plan.md) for what remains. To use `lio` from another program, see [docs/integration.md](docs/integration.md).
 
 ## What this is
 
@@ -51,11 +51,14 @@ target/release/lio live --max-seconds 60 --bind 0.0.0.0:2368 \
   --rays rays.bin --path path.tum
 ```
 
-The settings are FAST-LIO's Mid-360 configuration except four JT128 defaults, measured on the first capture. Each can be overridden with the flag in brackets (`lio` with no arguments lists them all):
+`--angles` takes the unit's own angle-correction file, exactly as the sensor sends it (PTC command `0x05`). `lio` checks the SHA-256 on its last line, and warns if the file is Hesai's sample instead: the sample has another unit's azimuth zero, which turns the cloud about 170° and leaves the IMU and LiDAR axes misaligned. `--firetimes` takes the JT128 file from Hesai's SDK (`correction/firetime_correction/`).
 
-- **IMU-to-LiDAR rotation** `[--extrinsic-r]`: 180° about z (`-1,0,0,0,-1,0,0,0,1`). The IMU's x and y point opposite to the LiDAR's.
+The settings are FAST-LIO's Mid-360 configuration except three JT128 defaults, measured on the first capture. Each can be overridden with the flag in brackets (`lio` with no arguments lists them all):
+
 - **Blind distance** `[--blind]`: 1.0 m. A handheld hemispherical sensor sees its operator, and those points move with it.
 - **Voxel sizes** `[--filter-size-surf]`, `[--filter-size-map]`: 0.25 m, against the Mid-360's 0.5 m. At 0.5 m the room's walls come out doubled. At 0.25 m they are single and half as many 5 cm cells are occupied. The run takes about a third longer: still about 40× real time on an M4.
+
+The IMU-to-LiDAR rotation `[--extrinsic-r]` keeps the Mid-360's identity: with the unit's own angle file, FAST-LIO's online estimation (`--extrinsic-est`, which prints its result) settles within 0.8° of it. The same settings are `lio::jt128_config()` for programs that embed the library.
 
 **Outputs:**
 
@@ -99,7 +102,7 @@ Beyond the fast cores, extra workers buy little speed for a lot of CPU, much of 
 
 ### Embedding and containers
 
-**Embedding:** `lio::Pipeline` runs the same stages in another program, on the caller's thread: push each UDP payload, and every finished frame comes back with its rays. To spread the stages over threads as `lio` does, run a `jt128::Decoder`, a `lio::Estimator` and `lio::Processed::rays` on separate threads, passing events and frames along in order (`crates/lio/src/main.rs`).
+**Embedding:** `lio::Pipeline` runs the same stages in another program, on the caller's thread: push each UDP payload, and every finished frame comes back with its rays (`crates/lio/examples/embed.rs`). To spread the stages over threads as `lio` does, run a `jt128::Decoder`, a `lio::Estimator` and `lio::Processed::rays` on separate threads, passing events and frames along in order (`crates/lio/src/main.rs`). [docs/integration.md](docs/integration.md) covers the frames, formats and timing a consumer needs.
 
 **Container:** the `Dockerfile` builds `lio` for the host's architecture, so an ARM board gets an arm64 image. The image is about 50 MB: the binary on Google's distroless base (glibc, no shell). Its usage is in the file's header. Only the sources go into the build context; `data/` never does. The multi-gigabyte images under `fixtures/` (FAST-LIO's C++ with PCL, and Hesai's SDK) are for development only.
 

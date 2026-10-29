@@ -17,12 +17,11 @@ const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 fn decode() -> (Vec<Frame>, Vec<ImuSample>) {
     let angles = AngleCorrection::parse(
-        &std::fs::read_to_string(format!("{ROOT}/data/angle_correction.csv")).unwrap(),
+        &std::fs::read(format!("{ROOT}/data/angle_correction.csv")).unwrap(),
     )
     .unwrap();
     let fire =
-        Firetimes::parse(&std::fs::read_to_string(format!("{ROOT}/data/firetimes.csv")).unwrap())
-            .unwrap();
+        Firetimes::parse(&std::fs::read(format!("{ROOT}/data/firetimes.csv")).unwrap()).unwrap();
     let mut dec = Decoder::new(&angles, Some(&fire), DecoderConfig::default());
     let mut pcap = PcapReader::new(BufReader::new(
         File::open(format!("{ROOT}/data/room-2.pcap")).unwrap(),

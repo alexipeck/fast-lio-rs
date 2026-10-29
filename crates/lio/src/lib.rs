@@ -21,6 +21,19 @@ use lio_core::mat::Vec3;
 use lio_core::point::Point;
 use lio_core::rays::{RawPoint, Ray, frame_rays};
 
+/// FAST-LIO's Mid-360 settings with the JT128's values where they differ,
+/// measured on the first capture (docs/plan.md, 2026-10-29): `blind` 1.0 m and
+/// 0.25 m voxels. The identity extrinsic stays: with the unit's own angle
+/// file, the IMU's axes are the LiDAR's. These are the `lio` binary's defaults.
+pub fn jt128_config() -> LioConfig {
+    LioConfig {
+        blind: 1.0,
+        filter_size_surf: 0.25,
+        filter_size_map: 0.25,
+        ..LioConfig::default()
+    }
+}
+
 /// One processed frame.
 #[derive(Clone, Debug)]
 pub struct FrameResult {
@@ -280,7 +293,9 @@ impl<W: Write> RayWriter<W> {
             b.extend_from_slice(&ray.range.to_le_bytes());
             b.extend_from_slice(&ray.intensity.to_le_bytes());
         }
-        self.w.write_all(b)
+        // Flushed per frame, so a reader on a pipe gets each frame as it is done.
+        self.w.write_all(b)?;
+        self.w.flush()
     }
 
     pub fn into_inner(self) -> W {

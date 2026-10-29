@@ -33,6 +33,11 @@ const EVENT_QUEUE: usize = 256;
 /// Finished frames FAST-LIO may run ahead of the ray and output stage.
 const FRAME_QUEUE: usize = 4;
 
+/// The hash line of the sample angle file in Hesai's SDK, which is not any
+/// one unit's calibration.
+const HESAI_SAMPLE_ANGLES: &str =
+    "eab2786616959df9a225a2f8f433614250e631aff8111e6fa437f9aabecd2d7f";
+
 const USAGE: &str = "\
 usage:
   lio replay <capture.pcap> --angles <csv> [--firetimes <csv>] [options]
@@ -47,10 +52,10 @@ outputs:
   --dump-input <file>    record FAST-LIO's exact input for the C++ reference run
 
 FAST-LIO settings (defaults: FAST-LIO's Mid-360 configuration, except the
-four JT128 values given here):
-  --extrinsic-r <9 comma-separated>  LiDAR-to-IMU rotation, row-major
-                                     (default -1,0,0,0,-1,0,0,0,1: the JT128's
-                                     IMU x and y point opposite the LiDAR's)
+three JT128 values given here):
+  --extrinsic-r <9 comma-separated>  LiDAR-to-IMU rotation, row-major (default
+                                     identity: with the unit's own angle file,
+                                     the JT128's IMU axes are the LiDAR's)
   --blind <m>                        drop returns closer than this (default 1.0,
                                      which keeps a handheld operator out)
   --filter-size-surf <m> --filter-size-map <m>   voxel sizes (default 0.25)
@@ -84,18 +89,6 @@ Any option can be given a default when lio is built, in LIO_DEFAULT_ARGS:
   LIO_DEFAULT_ARGS='--cpus 2-5 --pin workers=3-5' cargo build --release
 The command line overrides these defaults.
 ";
-
-/// FAST-LIO's Mid-360 settings with the JT128's values where they differ,
-/// measured on the first capture (docs/plan.md, 2026-10-29).
-fn jt128_defaults() -> LioConfig {
-    LioConfig {
-        extrinsic_r: [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0],
-        blind: 1.0,
-        filter_size_surf: 0.25,
-        filter_size_map: 0.25,
-        ..LioConfig::default()
-    }
-}
 
 struct Args {
     mode: String,
@@ -198,7 +191,7 @@ fn parse_args() -> Result<Args, String> {
         max_frames: None,
         threads: None,
         placement: Placement::default(),
-        lio: jt128_defaults(),
+        lio: lio::jt128_config(),
     };
     if mode == "replay" {
         a.capture = Some(it.next().ok_or("replay needs a capture file")?);
@@ -586,12 +579,26 @@ fn run(a: Args) -> Result<(), String> {
     }
     let placement = place_threads(&a)?;
     let angles = AngleCorrection::parse(
-        &std::fs::read_to_string(&a.angles).map_err(|e| format!("{}: {e}", a.angles))?,
+        &std::fs::read(&a.angles).map_err(|e| format!("{}: {e}", a.angles))?,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("{}: {e}", a.angles))?;
+    if angles.hash.as_deref() == Some(HESAI_SAMPLE_ANGLES) {
+        eprintln!(
+            "warning: {} is Hesai's sample angle file, not this unit's: its azimuth zero is \
+             a different unit's (170° off on the first JT128), so the IMU and LiDAR axes \
+             will not line up",
+            a.angles
+        );
+    }
+    if angles.hash_matches == Some(false) {
+        eprintln!(
+            "warning: {}: the SHA-256 at the end does not match the angles; the file may be damaged",
+            a.angles
+        );
+    }
     let firetimes = match &a.firetimes {
         Some(p) => Some(
-            Firetimes::parse(&std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?)
+            Firetimes::parse(&std::fs::read(p).map_err(|e| format!("{p}: {e}"))?)
                 .map_err(|e| e.to_string())?,
         ),
         None => None,
@@ -698,6 +705,26 @@ fn run(a: Args) -> Result<(), String> {
         outputs.last_pos[1],
         outputs.last_pos[2]
     );
+    if a.lio.extrinsic_est_en {
+        let x = &estimator.lio().kf.x;
+        let r = x.offset_r_l_i.to_matrix();
+        // Z-Y-X angles of the LiDAR in the IMU frame, in degrees.
+        let deg = f64::to_degrees;
+        eprintln!(
+            "extrinsic estimate: --extrinsic-r {} --extrinsic-t {},{},{} (yaw {:.2}°, pitch {:.2}°, roll {:.2}°)",
+            r.to_row_vec()
+                .iter()
+                .map(|v| format!("{v:.6}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            x.offset_t_l_i[0],
+            x.offset_t_l_i[1],
+            x.offset_t_l_i[2],
+            deg(r[(1, 0)].atan2(r[(0, 0)])),
+            deg((-r[(2, 0)]).clamp(-1.0, 1.0).asin()),
+            deg(r[(2, 1)].atan2(r[(2, 2)]))
+        );
+    }
     outputs.finish().map_err(|e| e.to_string())
 }
 

@@ -179,6 +179,8 @@ x = d*cos(el)*sin(az);  y = d*cos(el)*cos(az);  z = d*sin(el)
 
 **Axes.** Azimuth 0 points along **+Y** and 90° along **+X**, with Z up. That is Hesai's Y-forward, X-right convention, not ROS REP-103's X-forward, Y-left. To convert: `(x_ros, y_ros, z) = (y, −x, z)`. Either do this once in the decoder or fold it into FAST-LIO's extrinsic.
 
+On the housing (JT128 user manual, §1.3): azimuth 0, and so +Y, points toward the side with the connector. Azimuth increases clockwise seen from above, the way the head spins, so +X is 90° clockwise from the connector. Z is the dome's axis. This holds only with the unit's own angle file. The offsets in that file include the unit's encoder zero, so another unit's file turns the whole cloud: Hesai's sample file turns it about 170° on the first unit.
+
 **Optional optical-centre correction** (`distance_correction_flag`, off by default)
 - Applies only when `d > 0.09 m`.
 - Computes `p = d*u(az,el) + c` with `c = (−0.0076, 0.01367, 0.01274)` m, then takes `d = |p|` and recomputes the angles.
@@ -187,7 +189,7 @@ x = d*cos(el)*sin(az);  y = d*cos(el)*cos(az);  z = d*sin(el)
 **Notes**
 - The SDK rounds angles to 1/25600° and looks up sin/cos in two 9.2 M-entry float tables, about 74 MB in total. Compute sin/cos directly in Rust.
 - Elevation spans about −4.4° to 90.5°; the SDK's remake config uses this range.
-- Per-channel azimuth offsets are large; the sample file has 161°–270°. The channels in one block do not point in one direction.
+- Per-channel azimuth offsets are large, and they include the unit's encoder zero, so they differ from unit to unit. Hesai's sample file has 161°–270°; the first unit has −54° to +45°, plus −289° for channel 128, which points almost straight up. The channels in one block do not point in one direction.
 
 ## 6. Frame splitting [SDK]
 
@@ -271,7 +273,8 @@ The two files come from different places:
 **Angle correction (CSV)**
 - Header `Channel,Elevation,Azimuth`. There is also a variant whose first line is `EEFF`, followed by one more line to skip.
 - Then 128 rows of `id,elevation_deg,azimuth_deg`.
-- The last line is a 64-hex SHA-256 of the preceding text. The SDK only warns when it doesn't match.
+- The last line is a 64-hex SHA-256 of the preceding text. The SDK only warns when it doesn't match; `lio` warns too.
+- **As the sensor sends it** (PTC `0x05`, read from the first unit): a 4,096-byte flash page. The CSV with `\n` line ends and its hash line, then `0xFF` padding, then 4 binary bytes. Save the payload as is. The SDK and the `jt128` crate both skip the padding, which forms one more line that is neither a row nor a hash.
 
 **Firetimes (CSV)**
 - May start with a UTF-8 BOM.
@@ -293,9 +296,9 @@ The two files come from different places:
 5. Whether +Y points to the sensor's marked front.
 6. The 20 Hz block spacing (§4.2).
 
-Items 1–4 are answered in §11 from `room-2.pcap`, and so are the IMU's x/y axes (180° about z from the LiDAR's).
-- Item 5 needs a look at the unit.
-- Item 6 needs a 20 Hz capture.
+Items 1–4 are answered in §11 from `room-2.pcap`, and so are the IMU's axes: they are the LiDAR's.
+- Item 5: answered by the manual. +Y points toward the connector (§5, "Axes").
+- Item 6 needs a 20 Hz capture. 20 Hz is not planned for now (2026-10-29).
 
 The decoder reproduces Hesai SDK 2.0's points bit for bit, and all of its IMU samples (`fixtures/README.md`, "Hesai SDK reference").
 
@@ -318,9 +321,10 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 | IMU temperature | 34.9 °C rising to 37.2 °C over 104 s |
 
 **Found when running FAST-LIO on the capture:**
-- **IMU-to-LiDAR rotation: 180° about z** (`extrinsic_R = [-1,0,0, 0,-1,0, 0,0,1]`). The IMU's x and y point opposite to the LiDAR's.
-  - Among the eight axis-aligned candidates that keep z up or down, only this one gives a bounded path over the first 30 s: at most 3.8 m from start against hundreds of metres for the others.
-  - It also matches about twice as many points to planes.
+- **IMU-to-LiDAR rotation: none.** With the unit's own angle file, the IMU's axes are the LiDAR's, so FAST-LIO's identity `extrinsic_R` applies.
+  - FAST-LIO's online extrinsic estimation, started at 0°, −10° and +10° of yaw, settles within 0.8° of the identity each time. The rotations of 90°, 180° and 270° about z run thousands of metres away.
+  - With Hesai's sample angle file, the same data needed 180° about z instead. That file's azimuths are about 170.5° higher than the unit's, which turns the cloud; the 180° made up for it. Among the eight axis-aligned candidates that keep z up or down, only 180° gave a bounded path then.
+  - The translation stays 0. The online estimate puts the LiDAR origin about 2 cm above the IMU. A handheld room capture doesn't pin a translation down well, so this is not applied.
 - **The operator is in view.** From about 0.3 s in, about 25% of beams return nothing and a further quarter of the returns fall within 0.5 m. Those points move with the sensor, so `blind` must be about 1 m for handheld use.
 
 **Decoder rules that follow:**

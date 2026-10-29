@@ -26,7 +26,7 @@ These read the estimator's results and never feed back into it.
   - Points not later than a frame's first timeline pose are extrapolated from it. FAST-LIO leaves them uncompensated in its own map; that affects at most a point or two per frame.
   - Everything but `Exp(ω·dt)` is composed once per IMU segment, and `Exp(ω·dt)` is applied to each point's vectors with Rodrigues' formula. Against composing every point's pose in full, one ray in 20 million differs, in its last float bit.
 - **Frames before IMU initialisation get rays too**, from the current state as a constant pose. The sensor must be still during that time anyway.
-  - Their reported state carries the configured extrinsic. FAST-LIO's own state only receives it when the initialisation completes, so the C++ would place those frames with an identity mounting: 180° off on the JT128.
+  - Their reported state carries the configured extrinsic. FAST-LIO's own state only receives it when the initialisation completes, so the C++ would place those frames with an identity mounting. With the JT128's default identity extrinsic the two agree; they differ only when `--extrinsic-r` or `--extrinsic-t` is set.
   - This is the only difference in the per-frame CSV against the C++ harness, and it shows only in its first row or two.
 - **The corrected path** in TUM format, the per-frame CSV, and the ASCII PCD map.
   - FAST-LIO publishes its odometry before filling in that frame's covariance.
@@ -70,5 +70,5 @@ On the first real capture these are the only differences. They matter only becau
 | | Port against C++ as shipped | frame 477 | 158 mm | 149 mm |
 | | C++ as shipped against C++ with a stable voxel sort | frame 477 | 102 mm | 56 mm |
 
-All runs: `room-2.pcap`, 1,037 frames over 104 s, `blind` 1.0, 180° extrinsic, the same recorded input (`--dump-input`) for both implementations. The stable-sort C++ is the fixtures image with one line of PCL's `voxel_grid.hpp` changed to `std::stable_sort`, built with `PCL_NO_PRECOMPILE`.
+All runs: `room-2.pcap`, 1,037 frames over 104 s, `blind` 1.0, the same recorded input (`--dump-input`) for both implementations. The input was decoded with Hesai's sample angle file, so it used the 180° extrinsic that file needs; the unit's own file needs none (README). The stable-sort C++ is the fixtures image with one line of PCL's `voxel_grid.hpp` changed to `std::stable_sort`, built with `PCL_NO_PRECOMPILE`.
 

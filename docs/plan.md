@@ -17,11 +17,11 @@ File and line references to C++ code (`src/…`, `include/…`) point into [hku-
   - **range.**
 
   Both origin and direction are in the full-path world frame. They come from FAST-LIO's per-frame IMU timeline (`IMU_Processing.hpp:238-336`, interpolated per point), anchored to that frame's LiDAR-corrected end pose. The corrected full path is emitted alongside.
-- **`lio` is a feeder stage** for the user's processing pipeline. A 10 Hz angular depth map may be added as a consumer of the same rays.
+- **`lio` is a feeder stage** for the user's processing pipeline. A 10 Hz angular depth map was considered as a consumer of the same rays; it is not wanted for now (2026-10-29).
 - **FAST-LIO stays the algorithm.** Motion in the real use case is smooth. An IMU-only timeline drifts 3 m in 10 s on the first capture, so the LiDAR correction is required. Point-LIO was evaluated and deferred; it could become a separate crate later.
 - **The built-in 200 Hz IMU is used for now.** A 12,794 Hz IMU may replace it once mounted with known offsets.
 - **`lio` defaults to the JT128's settings**, measured on `room-2.pcap`. FAST-LIO's Mid-360 values stay the defaults in `lio-core` and the C++ harness. Each is a flag:
-  - **IMU-to-LiDAR rotation:** 180° about z. A sweep of candidate rotations gave the only stable path with this one.
+  - **IMU-to-LiDAR rotation: identity,** FAST-LIO's own default. With the unit's angle file, online estimation from ±10° settles within 0.8° of it. The 180° used earlier only made up for Hesai's sample angle file, whose azimuths are about 170.5° higher.
   - **`blind` 1.0 m:** keeps a handheld operator out of the map.
   - **Voxel sizes 0.25 m** (surface and map, against 0.5 m): the walls are single instead of doubled. Occupied 5 cm cells drop from 190k to 97k for the same rays, and the path loses 3.7 m of jitter (13.5 m → 9.8 m). The run is still 12× real time on the M4. At 0.25 m, `blind` 0.5 is stable too, though FAST-LIO itself diverges with it at 0.5 m voxels.
 
@@ -198,6 +198,7 @@ M1 can run alongside M0 and M3. M2 needs M1's pcaps. M3 and M4 depend only on M0
    - Needed before M6.
 2. **Ray transport and latency.** Where do the rays go (in-process, shared memory, socket, file), and in what layout? One record per point, or one pose per firing block plus per-point time offsets? Rays are final only after each frame's correction, up to about 100 ms plus processing. Should provisional, IMU-predicted rays go out sooner?
    - Until this is decided, `lio --rays` writes a file and `lio::Pipeline` hands each frame's rays to an embedding program.
-3. **IMU and LiDAR axes.**
-   - **IMU against LiDAR: answered 2026-10-29.** The rotation is 180° about z.
-   - **+Y against the marked front: still open.** It needs a look at the unit.
+3. **IMU and LiDAR axes: answered 2026-10-29.**
+   - **IMU against LiDAR:** no rotation, with the unit's own angle file (`data/angle_correction.csv`, read from the sensor). The earlier 180° came from Hesai's sample file.
+   - **+Y on the housing:** toward the connector, per the JT128 manual (§1.3). +X is 90° clockwise from it seen from above, and Z is the dome's axis.
+4. **20 Hz: not planned for now** (2026-10-29). The decoder's 20 Hz block spacing stays unverified.

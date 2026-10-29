@@ -13,24 +13,21 @@ use std::io::BufReader;
 use jt128::pcap::PcapReader;
 use jt128::{AngleCorrection, DecoderConfig, Firetimes};
 use lio::{FrameResult, Pipeline};
-use lio_core::lio::LioConfig;
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const FRAMES: usize = 150;
 
 /// Hash of every ray and every frame's state over the first [`FRAMES`] frames.
 fn replay_hash() -> (u64, usize) {
-    let read = |name: &str| std::fs::read_to_string(format!("{ROOT}/data/{name}")).unwrap();
+    let read = |name: &str| std::fs::read(format!("{ROOT}/data/{name}")).unwrap();
     let angles = AngleCorrection::parse(&read("angle_correction.csv")).unwrap();
     let fire = Firetimes::parse(&read("firetimes.csv")).unwrap();
-    let cfg = LioConfig {
-        extrinsic_r: [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0],
-        blind: 1.0,
-        filter_size_surf: 0.25,
-        filter_size_map: 0.25,
-        ..LioConfig::default()
-    };
-    let mut pipeline = Pipeline::new(&angles, Some(&fire), DecoderConfig::default(), cfg);
+    let mut pipeline = Pipeline::new(
+        &angles,
+        Some(&fire),
+        DecoderConfig::default(),
+        lio::jt128_config(),
+    );
     let file = File::open(format!("{ROOT}/data/room-2.pcap")).unwrap();
     let mut pcap = PcapReader::new(BufReader::new(file)).unwrap();
     let (mut out, mut frames, mut rays) = (Vec::<FrameResult>::new(), 0, 0);

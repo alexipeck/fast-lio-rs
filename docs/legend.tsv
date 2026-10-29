@@ -1,6 +1,7 @@
 term	category	expansion	description	source
 ament	tool	ROS2 build system	Build system used on the origin/ROS2 branch (with colcon)	
-angle correction	format	per-channel angle calibration file	Hesai CSV (Channel,Elevation,Azimuth) per unit, ending in a SHA-256 line; supplies each channel's elevation and azimuth offset	
+angle correction	format	per-channel angle calibration file	per-unit angle calibration: Hesai CSV (Channel,Elevation,Azimuth), 128 rows ending in a SHA-256 line. The azimuths include the unit's encoder zero, so another unit's file turns the cloud. Sent by the sensor (PTC 0x05) as a 4,096-byte flash page with 0xFF padding	docs/hesai_jt128_decoder.md
+back-pressure	computing		a slow consumer slowing its producer: lio's stages are joined by bounded queues, so a slow ray reader makes lio stop reading its socket, and packets are then lost in the kernel	docs/integration.md
 big.LITTLE	computing		CPU with fast and slow cores (Apple M4: 4+6; RK3588: 4×A76 + 4×A55). lio --threads set to the fast-core count uses far less CPU for nearly the same speed	crates/lio/src/main.rs
 boxplus	method	manifold plus operator	Applies a tangent-space increment to a manifold state; boxminus is the inverse difference	
 catkin	tool	ROS1 build system	Build system used by FAST_LIO main branch; ROS2 replaced it with ament/colcon	
@@ -20,21 +21,25 @@ LIO	domain	LiDAR-Inertial Odometry	Pose estimation that fuses LiDAR scans with I
 LIO_DEFAULT_ARGS	project		Build-time environment variable: lio options compiled in as defaults, read before the command line (which overrides them); a Dockerfile build argument too	crates/lio/src/main.rs
 LIORAYS1	format	ray file magic	First 8 bytes of a lio --rays file; then per frame u32 count, f64 begin, f64 end, u8 kind and 40-byte ray records	crates/lio/src/lib.rs
 MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) that composes vect, SO3 and S2 into one state type with boxplus/boxminus	
+named pipe	computing		a FIFO special file (mkfifo) one process writes and another reads; one way to stream lio's rays to another program	docs/integration.md
 NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
 OpenMP	tool	Open Multi-Processing	C/C++ pragma-based threading; FAST-LIO uses it for its correspondence loop, enabled by its CMake only on x86 (MP_EN, 3 threads with more than 4 cores)	FAST_LIO CMakeLists.txt
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
 PCL	tool	Point Cloud Library	C++ library FAST-LIO uses for point types and VoxelGrid downsampling; only the fixtures image uses it	fixtures/README.md
 pinning	computing		Restricting a thread to chosen CPUs (CPU affinity, sched_setaffinity). lio --cpus pins the process, --pin <stage>=<list> one stage; Linux only	crates/lio/src/cpus.rs
 PTC	standard	Hesai TCP control protocol	Hesai's TCP command channel (SDK default port 9347); 0x05 returns angle calibration, 0xA9 returns firetimes	
+ray	project		lio's per-point output: point time, LiDAR origin and unit beam direction in the world frame, range and intensity; the point is origin + range·direction	docs/integration.md
 rayon	tool		Rust data-parallelism crate; runs lio-core's correspondence search on all cores, RAYON_NUM_THREADS sets the count	crates/lio-core/src/lio.rs
 REP-103	standard	ROS Enhancement Proposal 103	ROS axis convention (X forward, Y left, Z up); Hesai's frame is Y forward, X right	
 REP-145	standard	ROS Enhancement Proposal 145	Requires sensor_msgs/Imu in m/s^2 and rad/s; Hesai's ROS driver publishes g and deg/s	
 Rodrigues' formula	method		Rotation of a vector by angle θ about unit axis k: w + sin θ (k×w) + (1−cos θ) k×(k×w); FAST-LIO's Exp builds the same rotation as a matrix. The rays apply it per point	crates/lio-core/src/rays.rs
 S2	domain	2-sphere manifold	Unit-sphere state type with 2 DOF; FAST-LIO stores gravity as S2 so its magnitude stays fixed at 9.81	
 SDK	tool	software development kit	Here Hesai LiDAR SDK 2.0, the reference the jt128 decoder is checked against	fixtures/README.md
+SHA-256	standard	Secure Hash Algorithm 2, 256-bit	the hash on the angle-correction file's last line, over the lines above it; checked by lio and the SDK, which only warn	docs/hesai_jt128_decoder.md
 SIMD	computing	single instruction, multiple data	Vector instructions (NEON on ARM, SSE/AVX on x86); Eigen's SIMD reductions fix the summation order the plane fit reproduces	DEVIATIONS.md
 sincos	computing		libm call returning sine and cosine of one angle together; GCC and LLVM merge adjacent sin and cos into it, with the same results as separate calls	crates/lio-core/src/imu_process.rs
 spreadsort	method	Boost.Sort spreadsort	Unstable radix-based sort PCL 1.12's VoxelGrid uses; leaves the summation order within a voxel unspecified	DEVIATIONS.md
 TUM	format	TUM RGB-D trajectory format	One pose per line: t x y z qx qy qz qw; the format of lio --path	README.md
 UDP 1.4	standard	Hesai point-cloud UDP protocol v1.4	Packet format shared by Pandar128, OT128 and JT128; byte 4 >= 137 marks JT128	
 ULP	metric	unit in the last place	Spacing between adjacent floating-point values; used to size Rust-vs-C++ differences	DEVIATIONS.md
+world frame	domain		FAST-LIO's fixed frame for a run: the IMU frame at initialisation, origin at the start position. Not levelled; gravity is estimated as a vector in it (state.grav)	docs/integration.md

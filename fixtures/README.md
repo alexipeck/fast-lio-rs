@@ -37,8 +37,10 @@ Generation is deterministic: a fixed seed, and the inputs are written next to th
 
 ```bash
 docker run --rm -v "$PWD/data:/data" fast-lio-rs-fixtures /build/run_fastlio /data/input.bin /data/cpp_frames.csv \
-  extrinsic_R=-1,0,0,0,-1,0,0,0,1 filter_size_surf=0.25 filter_size_map=0.25
+  filter_size_surf=0.25 filter_size_map=0.25
 ```
+
+The results below were recorded before the unit's angle file was read out. Their input was decoded with Hesai's sample angle file, which needs `extrinsic_R=-1,0,0,0,-1,0,0,0,1` as well; the unit's own file needs none.
 
 The results on the first JT128 capture (the data stays local) are in [DEVIATIONS.md](../DEVIATIONS.md#floating-point-differences). In short, the two agree to the last bit in single precision until PCL's unspecified voxel order, or a fused multiply-add inside Eigen, changes a last bit. A chaotic stretch of the data then grows that difference, exactly as it does between two builds of FAST-LIO itself.
 
@@ -50,7 +52,7 @@ The image builds with `-ffp-contract=off`, so the compiler adds no fused multipl
 
 ```bash
 cargo run --release -p lio --example run_input -- data/input.bin data/rust_frames.csv \
-  extrinsic_R=-1,0,0,0,-1,0,0,0,1 filter_size_surf=0.25 filter_size_map=0.25
+  filter_size_surf=0.25 filter_size_map=0.25
 ```
 
 Results on `room-2.pcap` (1,037 frames over 103.9 s, JT128 settings), both in one linux/arm64 container on an Apple M4 (4 fast and 6 slow cores) with the machine otherwise quiet. Each figure is the median of three interleaved runs of the mapping loop alone; runs agreed within 3%:
@@ -89,7 +91,7 @@ docker run --rm -v "$PWD/data:/data" fast-lio-rs-hesai /data/room-2.pcap \
 cargo test --release -p jt128 --test sdk_reference -- --ignored --nocapture
 ```
 
-On `room-2.pcap`, SDK frames 100 and 101 come out the same: 227,318 points with bit-identical coordinates, and times within 4 ns, the resolution of `dt_ms`. All 20,784 of the SDK's IMU samples match ours by value. The SDK stamps 48 of them one packet (about 222 µs) later than we do:
+On `room-2.pcap`, SDK frames 100 and 101 come out the same: 227,318 points with bit-identical coordinates, and times within 4 ns, the resolution of `dt_ms`. That holds with Hesai's sample angle file and with the unit's own file, which has negative azimuth offsets and arrives as a padded flash page. All 20,784 of the SDK's IMU samples match ours by value. The SDK stamps 48 of them one packet (about 222 µs) later than we do:
 - the capture's first sample, because the SDK spends the first packet detecting the lidar type;
 - every sample whose value first arrives in the packet that starts a new frame, on which the SDK finishes the previous one.
 

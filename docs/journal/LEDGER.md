@@ -433,3 +433,32 @@ Follows the 11:08 entry above.
   - The user: "we are going for efficiency. So as long as it's fast enough, that's all right", and two sensors will come later.
 - **test** — The deployment image's runtime base moved from `debian:bookworm-slim` to `gcr.io/distroless/cc-debian12`. The image is now 49 MB, built for real this time now that the registry answers. The 4 GB images are the `fixtures/` development images.
 - **note** — The user allowed pushing to a private GitHub repository. This Mac can't authenticate to GitHub: there is no `gh`, the SSH key is not registered there, and the keychain holds no GitHub login. The push waits on the user signing in.
+
+### 13:43 · The unit's angle file, the IMU rotation undone, and an integration guide
+`session 2a591fe4` · `main` @ `34778dc` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Follows the 11:36 entry above. The user read the unit's angle file out (`data/jt128-desk.csv`) and sent the JT128 manual's coordinate figure (§1.3).
+
+- **test** — The file is the PTC `0x05` payload as is: a 4,096-byte flash page. It holds the CSV with `\n` line ends, a SHA-256 line that matches the lines above it, then `0xFF` padding and 4 binary bytes.
+  - `lio` rejected it, because it read the file as UTF-8 text. `AngleCorrection::parse` now takes bytes, skips the padding as the SDK does, and checks the hash.
+  - It is now `data/angle_correction.csv`; Hesai's sample moved to `data/hesai_sample_angles.csv`.
+- **test** — With the unit's file, Hesai's SDK and the decoder still agree bit for bit: frames 100 and 101, and every IMU sample. The file has negative azimuth offsets, which the sample never had.
+- **verdict → I was wrong** — The 180° IMU-to-LiDAR rotation (decided 2026-10-29, morning) was not a property of the JT128. The unit's azimuths are about 170.5° lower than the sample's, which turns the cloud, and the 180° made up for it.
+  - **With the unit's file:**
+    - 180° runs 8.6 km away.
+    - A yaw sweep is flat from −8° to +3° (median matched 0.74–0.76).
+    - FAST-LIO's online estimation, started at 0°, −10° and +10°, settles at −0.2°, −0.8° and +0.4°.
+  - **Decision:** the default is now the identity (`lio::jt128_config()`). `lio` warns when given Hesai's sample file.
+  - **Full run:** matched median 0.744, against 0.719 before; path 9.51 m against 9.85 m.
+- **decision** — Axes on the housing, from the manual's figures: +Y (azimuth 0) points toward the connector, +X is 90° clockwise seen from above, and Z is the dome's axis. The wall recording is no longer needed.
+- **decision** — The user: "For the moment I won't go 20 Hz." and "We won't do the depth map for now."
+- **decision** — The user asked for documentation "that will tell another model what this program does, how to integrate it and how to go about using it", for another of their projects. That became `docs/integration.md`.
+  - **Checked:**
+    - the Rust live snippet compiles;
+    - the Python reader parses the stream from stdout and from a named pipe, and drops a frame cut short;
+    - closing the pipe ends `lio` with status 1.
+  - **Made along the way:**
+    - `lio::jt128_config()` moved into the library, because an embedding program would otherwise get the Mid-360's settings;
+    - `crates/lio/examples/embed.rs`;
+    - the ray stream is flushed per frame;
+    - `--extrinsic-est` prints its estimate.
