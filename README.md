@@ -2,12 +2,18 @@
 
 A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LIO) (FAST-LIO2) LiDAR-inertial odometry. It targets the Hesai JT128 and reads the sensor's UDP packets directly.
 
-> **Status:** working end to end on a real JT128 capture. The decoder, FAST-LIO's full mapping loop, per-point rays and the corrected path all run, at about 10× real time on an Apple M4. The math, map and update components pass golden tests against FAST-LIO's own C++. See [docs/plan.md](docs/plan.md) for what remains.
+> **Status:** working end to end on a real JT128 capture: the decoder, FAST-LIO's full mapping loop, per-point rays and the corrected path. It runs at about 12× real time on an Apple M4 and 9× in a linux/arm64 container on the same machine.
+>
+> - **Decoder:** reproduces Hesai's SDK point for point.
+> - **Filter and map:** fed the same input, it reproduces FAST-LIO's own C++ to the last bit in single precision and to about 1e-16 in double. On long runs, chaotic stretches of the data grow those last-bit differences to millimetres or centimetres. FAST-LIO shows the same spread against itself ([DEVIATIONS.md](DEVIATIONS.md#floating-point-differences)).
+> - **Calibration:** uses Hesai's *sample* angle file until the unit's own is read out.
+>
+> See [docs/plan.md](docs/plan.md) for what remains.
 
 ## What this is
 
 - **FAST-LIO's algorithm, implemented exactly.** The algorithm is as written in hku-mars/FAST_LIO at commit [`7cc4175`](https://github.com/hku-mars/FAST_LIO/tree/7cc4175): the iterated error-state Kalman filter on manifolds, IMU propagation and motion compensation, the ikd-Tree local map, and every constant.
-  - Golden tests generated from FAST-LIO's own C++ check this (`fixtures/`).
+  - Golden tests generated from FAST-LIO's own C++ check this (`fixtures/`), and so does an end-to-end harness that runs FAST-LIO's unchanged `laserMapping.cpp` on the input a Rust run recorded.
   - Any change in behaviour is opt-in and listed in [DEVIATIONS.md](DEVIATIONS.md).
 - **Everything else is stripped out.** That covers ROS (nodes, topics, TF, launch files), the other sensor drivers, feature extraction, and the plotting and debug tooling.
 - **A native JT128 decoder,** following Hesai's LiDAR SDK 2.0. See [docs/hesai_jt128_decoder.md](docs/hesai_jt128_decoder.md).
@@ -32,7 +38,6 @@ Replay a recording and write rays, the path and the map:
 ```bash
 target/release/lio replay data/room-2.pcap \
   --angles data/angle_correction.csv --firetimes data/firetimes.csv \
-  --extrinsic-r -1,0,0,0,-1,0,0,0,1 --blind 1.0 \
   --rays rays.bin --path path.tum --frames-csv frames.csv --map map.pcd
 ```
 
@@ -41,11 +46,14 @@ Run live. It only listens on UDP, and `--max-seconds` is mandatory:
 ```bash
 target/release/lio live --max-seconds 60 --bind 0.0.0.0:2368 \
   --angles data/angle_correction.csv --firetimes data/firetimes.csv \
-  --extrinsic-r -1,0,0,0,-1,0,0,0,1 --blind 1.0 --rays rays.bin --path path.tum
+  --rays rays.bin --path path.tum
 ```
 
-- **`--extrinsic-r -1,0,0,0,-1,0,0,0,1`** is the JT128's IMU-to-LiDAR rotation, measured on the first capture: the IMU's x and y point opposite to the LiDAR's.
-- **`--blind 1.0`** drops returns within 1 m. A handheld hemispherical sensor sees its operator, and those points move with it.
+The settings are FAST-LIO's Mid-360 configuration except four JT128 defaults, measured on the first capture. Each can be overridden with the flag in brackets (`lio` with no arguments lists them all):
+
+- **IMU-to-LiDAR rotation** `[--extrinsic-r]`: 180° about z (`-1,0,0,0,-1,0,0,0,1`). The IMU's x and y point opposite to the LiDAR's.
+- **Blind distance** `[--blind]`: 1.0 m. A handheld hemispherical sensor sees its operator, and those points move with it.
+- **Voxel sizes** `[--filter-size-surf]`, `[--filter-size-map]`: 0.25 m, against the Mid-360's 0.5 m. At 0.5 m the room's walls come out doubled. At 0.25 m they are single, half as many 5 cm cells are occupied, and the run is still 12× real time.
 
 **Outputs:**
 
@@ -57,6 +65,8 @@ target/release/lio live --max-seconds 60 --bind 0.0.0.0:2368 \
 | `--map` | The final map, ASCII PCD. |
 
 **Embedding:** use `lio::Pipeline` to embed the same stage in another program. Push each UDP payload; every finished frame comes back with its rays.
+
+**Container:** the `Dockerfile` builds `lio` for the host's architecture, so an ARM board gets an arm64 image. Its usage is in the file's header. Only the sources go into the build context; `data/` never does.
 
 ## Sensor safety
 

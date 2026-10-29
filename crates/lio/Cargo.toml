@@ -17,5 +17,8 @@ path = "src/main.rs"
 jt128.workspace = true
 lio-core.workspace = true
 
+[dev-dependencies]
+rayon.workspace = true
+
 [lints]
 workspace = true

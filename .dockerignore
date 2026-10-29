@@ -1,0 +1,7 @@
+# Only the sources go into the build context. Recordings and calibration
+# files in data/ are private and must never end up in an image.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/

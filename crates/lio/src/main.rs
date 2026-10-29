@@ -28,16 +28,33 @@ outputs:
   --map <file.pcd>       final map, ASCII PCD
   --dump-input <file>    record FAST-LIO's exact input for the C++ reference run
 
-FAST-LIO settings (defaults: FAST-LIO's Mid-360 configuration):
-  --extrinsic-r <9 comma-separated>  LiDAR-to-IMU rotation, row-major (default identity)
+FAST-LIO settings (defaults: FAST-LIO's Mid-360 configuration, except the
+four JT128 values given here):
+  --extrinsic-r <9 comma-separated>  LiDAR-to-IMU rotation, row-major
+                                     (default -1,0,0,0,-1,0,0,0,1: the JT128's
+                                     IMU x and y point opposite the LiDAR's)
+  --blind <m>                        drop returns closer than this (default 1.0,
+                                     which keeps a handheld operator out)
+  --filter-size-surf <m> --filter-size-map <m>   voxel sizes (default 0.25)
   --extrinsic-t <3 comma-separated>  LiDAR position in the IMU frame, m (default 0)
   --extrinsic-est                    estimate the extrinsic online
   --time-offset <s>                  time_offset_lidar_to_imu (default 0)
-  --max-iteration <n> --filter-size-surf <m> --filter-size-map <m>
-  --point-filter-num <n> --blind <m> --det-range <m> --cube-side-length <m>
+  --max-iteration <n> --point-filter-num <n> --det-range <m> --cube-side-length <m>
   --gyr-cov <v> --acc-cov <v> --b-gyr-cov <v> --b-acc-cov <v>
   --max-frames <n>                   stop after n frames
 ";
+
+/// FAST-LIO's Mid-360 settings with the JT128's values where they differ,
+/// measured on the first capture (docs/plan.md, 2026-10-29).
+fn jt128_defaults() -> LioConfig {
+    LioConfig {
+        extrinsic_r: [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0],
+        blind: 1.0,
+        filter_size_surf: 0.25,
+        filter_size_map: 0.25,
+        ..LioConfig::default()
+    }
+}
 
 struct Args {
     mode: String,
@@ -83,7 +100,7 @@ fn parse_args() -> Result<Args, String> {
         map: None,
         dump_input: None,
         max_frames: None,
-        lio: LioConfig::default(),
+        lio: jt128_defaults(),
     };
     if mode == "replay" {
         a.capture = Some(it.next().ok_or("replay needs a capture file")?);
