@@ -208,3 +208,22 @@ Continuation of the 01:17 entry above.
   - Ignoring translation leaves each sweep's origin off by up to v·Δt: about 10–15 cm per 100 ms at walking pace, half that if referenced to mid-sweep.
   - A world frame that stays fixed across sweeps additionally needs drift correction, i.e. LIO.
 - **decision** — Pending the user's answer: if each sweep can stand alone (its own frame, translation ignored or supplied), go IMU-only in a fresh repo. Otherwise do the Point-LIO crate here. The per-point ray stage is the same in both designs.
+
+### 01:39 · Translation and the full path are required; IMU-only dead reckoning measured
+`session 2a591fe4` · `main` @ `1544e0e` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 01:28 entry above.
+
+- **decision** — User: "Start velocity is supposed to be 0, at least for the start of the capture. It should maintain the full path." Also: "for my actual use case, the physical motion will be smooth. I do need translation."
+- **test** — IMU-only dead reckoning of `room-2.pcap` from rest, with v0 = 0, gyro bias and initial tilt (1.41°) taken from the first 6 s, and accel scaled so |acc| at rest equals 9.81. The script is in the session scratchpad, `tools/dead_reckon.py`.
+  - Position error after leaving rest: 0.00 m at 0.8 s (still stationary, sanity check), 1.0 m at 5 s, 3.3 m at 10 s, 13.5 m at 20 s, 36 m at 30 s, 170 m at 60 s, 509 m at 97 s.
+  - Speed reaches 12.5 m/s by the end, while the true path stays inside a room a few metres across.
+  - The first run had a bug in the script: it multiplied by g twice, giving 86 m/s after 1 s. Caught and fixed before reporting.
+- **claim** — FAST-LIO's per-frame undistortion *is* the timeline the user described (`IMU_Processing.hpp:238-336`).
+  - It is seeded from the previous frame's LiDAR-corrected state, including velocity.
+  - It stores (time, world acc, angular rate, vel, pos, rot) at each IMU sample.
+  - Each point interpolates R·Exp(ω·dt) and p + v·dt + ½a·dt² from its bracketing sample.
+  - The end state is then corrected and seeds the next frame.
+
+  The user's design plus the correction step is FAST-LIO. Per-point rays come from that timeline, anchored to the corrected end pose. With smooth motion, Point-LIO's advantages (aggressive motion, saturation, kHz-rate correction) aren't needed.
+- **decision** — Recommended continuing FAST-LIO in this repo, which is already through M3 and M4, and adding the ray output to M5. Point-LIO is deferred. Awaiting the user's confirmation.
