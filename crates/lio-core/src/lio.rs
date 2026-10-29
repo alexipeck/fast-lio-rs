@@ -14,6 +14,7 @@ use crate::imu_process::{ImuProcess, MeasureGroup, Timeline};
 use crate::mat::{Mat3, Vec3};
 use crate::plane::{NUM_MATCH_POINTS, esti_plane};
 use crate::point::Point;
+use crate::so3::Quat;
 use crate::state::{DOF, State};
 use crate::voxel;
 
@@ -88,7 +89,9 @@ pub struct FrameOutput {
     pub kind: FrameKind,
     pub lidar_beg_time: f64,
     pub lidar_end_time: f64,
-    /// The state at the frame's end: corrected if `kind` is `Updated`.
+    /// The state at the frame's end: corrected if `kind` is `Updated`. Before
+    /// the IMU is initialised it holds the configured extrinsic, which
+    /// FAST-LIO's own state only receives at initialisation.
     pub state: State,
     /// The frame's IMU timeline, once the IMU is initialised.
     pub timeline: Option<Timeline>,
@@ -255,11 +258,21 @@ impl Lio {
         down: usize,
         eff: usize,
     ) -> FrameOutput {
+        let mut state = self.kf.x;
+        if matches!(kind, FrameKind::FirstScan | FrameKind::ImuInit) {
+            // FAST-LIO puts the configured extrinsic into the state only when
+            // the IMU initialisation completes (`IMU_init`); until then the
+            // state holds the identity. Report the configured one, as the
+            // initialisation will set it, so these frames' rays use the real
+            // mounting. The pose itself is the identity either way.
+            state.offset_t_l_i = Vec3::from_array(self.cfg.extrinsic_t);
+            state.offset_r_l_i = Quat::from_matrix(&Mat3::from_row_slice(&self.cfg.extrinsic_r));
+        }
         FrameOutput {
             kind,
             lidar_beg_time: self.meas.lidar_beg_time,
             lidar_end_time: self.meas.lidar_end_time,
-            state: self.kf.x,
+            state,
             timeline,
             downsampled_points: down,
             effective_features: eff,

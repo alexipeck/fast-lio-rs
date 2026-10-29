@@ -25,6 +25,8 @@ These read the estimator's results and never feed back into it.
   - Each point's pose is interpolated from its frame's IMU timeline and anchored to the corrected end-of-frame state, the way FAST-LIO places points in its map.
   - Points not later than a frame's first timeline pose are extrapolated from it. FAST-LIO leaves them uncompensated in its own map; that affects at most a point or two per frame.
 - **Frames before IMU initialisation get rays too**, from the current state as a constant pose. The sensor must be still during that time anyway.
+  - Their reported state carries the configured extrinsic. FAST-LIO's own state only receives it when the initialisation completes, so the C++ would place those frames with an identity mounting: 180° off on the JT128.
+  - This is the only difference in the per-frame CSV against the C++ harness, and it shows only in its first row or two.
 - **The corrected path** in TUM format, the per-frame CSV, and the ASCII PCD map.
   - FAST-LIO publishes its odometry before filling in that frame's covariance.
   - FAST-LIO's covariance has position and rotation blocks swapped relative to ROS's order.

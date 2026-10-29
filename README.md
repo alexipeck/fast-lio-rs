@@ -6,6 +6,7 @@ A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LI
 >
 > - **Decoder:** reproduces Hesai's SDK point for point.
 > - **Filter and map:** fed the same input, it reproduces FAST-LIO's own C++ to the last bit in single precision and to about 1e-16 in double. On long runs, chaotic stretches of the data grow those last-bit differences to millimetres or centimetres. FAST-LIO shows the same spread against itself ([DEVIATIONS.md](DEVIATIONS.md#floating-point-differences)).
+> - **Rays, against ground truth:** a synthetic JT128-like run in a box room puts ray end points at a 10 mm median and 24 mm at worst. FAST-LIO's C++ gets the same trajectory from the same input.
 > - **Calibration:** uses Hesai's *sample* angle file until the unit's own is read out.
 >
 > See [docs/plan.md](docs/plan.md) for what remains.

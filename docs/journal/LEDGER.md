@@ -312,3 +312,26 @@ Continuation of the 02:52 entry above.
   - It builds, and its image replays at 9.3× real time.
   - The build context excludes `data/` (190 kB).
 - **note** — 12 GB of disk free. The large ray files and recorded inputs were deleted after use.
+
+### 03:40 · Synthetic ground truth, and a pre-initialisation ray bug
+`session 2a591fe4` · `main` @ `6544aab` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 03:23 entry above.
+
+- **test** — `crates/lio-core/tests/synthetic.rs`, a closed-loop simulation with ground truth:
+  - **Scene:** a box room with box obstacles.
+  - **Sensor:** a 128-beam LiDAR from −5° to +89° (the JT128's span, from the angle file), 200 Hz noise-free IMU, ±2 cm range noise, 180° mounting with a 7 cm offset.
+  - **Motion:** still for 2 s, then smooth: up to 1 rad of rotation and 1.6 m of travel.
+  - **Fixture check:** dead reckoning on the synthetic IMU stays within 0.06 mm of the truth over 10 s.
+- **verdict → bug found** — Before IMU initialisation, rays used the state's identity extrinsic. FAST-LIO only writes the configured extrinsic into the state at `IMU_init`, so on the JT128 the first frame or two of every run had rays turned 180° and shifted by the offset. Fixed: `Lio` reports the configured extrinsic for `FirstScan` and `ImuInit` frames. On the real capture only the first CSV row changes.
+- **test** — Results:
+  - **End poses** are within 13 mm and 0.12° of the truth. Ray end points have a 10 mm median and 24 mm at worst.
+  - **Within a frame**, rays differ from the truth's motion (after the frame's end-pose error is taken out) by at most 2 mm and 0.02°. That is FAST-LIO's velocity and bias estimate between corrections.
+  - **Runtime:** 33 s in a debug build (CI), 1 s in release.
+- **test** — The same synthetic input through FAST-LIO's C++ (`run_fastlio`):
+  - **Agreement:** identical counts through frame 21, and the end positions agree to 0.1 mm.
+  - **Error against the truth:** identical for both (mean 9.98 mm, max 13.21 mm). The centimetre-level error is FAST-LIO's point-to-plane bias at the room's corners (voxel centroids off the surfaces), not the port's.
+- **test** — Sensitivity on synthetic data:
+  - Zero range noise leaves a 2–3 cm offset, so the bias is geometric.
+  - 0.5 m voxels are 3× worse than 0.25 m (58 mm, 0.54°), as on the real capture.
+  - A sparse 32-beam layout over 140° gave 1°-level errors: rings 4.5° apart make the 5-neighbour plane fits nearly collinear.
