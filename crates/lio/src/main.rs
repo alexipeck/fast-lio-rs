@@ -17,6 +17,15 @@ use jt128::{AngleCorrection, Decoder, DecoderConfig, DecoderStats, Event, Fireti
 use lio::{Estimator, FrameResult, Processed, RayWriter, lidar_pose, write_pcd};
 use lio_core::lio::{FrameKind, LioConfig};
 
+mod cpus;
+
+/// Options built in at compile time from `LIO_DEFAULT_ARGS` (whitespace-
+/// separated). They are read before the command line, which overrides them.
+const BUILT_IN_ARGS: &str = match option_env!("LIO_DEFAULT_ARGS") {
+    Some(s) => s,
+    None => "",
+};
+
 /// Packets' worth of decoder events the decoding thread may run ahead of
 /// FAST-LIO. A frame is about 450 packets, and only packets that finish a
 /// frame or carry a new IMU sample produce events.
@@ -52,12 +61,28 @@ four JT128 values given here):
   --gyr-cov <v> --acc-cov <v> --b-gyr-cov <v> --b-acc-cov <v>
   --max-frames <n>                   stop after n frames
 
-performance:
-  --threads <n>          worker threads for FAST-LIO's matching, motion
-                         compensation and the rays. Default: the fastest
-                         cores, where Linux reports core capacities (ARM
-                         big.LITTLE boards), else one per CPU. Decoding and
-                         FAST-LIO's serial steps run on two more threads.
+threads and CPUs:
+  lio runs three stages on their own threads, plus workers for the parallel
+  parts. The stages:
+    decode   receives and decodes the packets
+    lio      FAST-LIO's serial steps
+    output   collects the rays and writes the outputs
+    workers  FAST-LIO's matching and motion compensation, and the rays
+  --threads <n>          number of workers. Default: one per CPU given to
+                         --pin workers, else the fastest cores where Linux
+                         reports core capacities (ARM big.LITTLE boards),
+                         else one per CPU
+  --cpus <list>          run only on these CPUs, such as 4-7 (like taskset)
+  --pin <stage>=<list>   run one stage only on these CPUs, such as lio=4 or
+                         workers=5-7. Workers get one CPU each when there are
+                         as many as CPUs listed. Repeat for each stage; an
+                         unpinned stage runs on any CPU --cpus allows. A list
+                         of `any` removes a restriction built in by default.
+                         --cpus and --pin need Linux and are ignored elsewhere.
+
+Any option can be given a default when lio is built, in LIO_DEFAULT_ARGS:
+  LIO_DEFAULT_ARGS='--cpus 2-5 --pin workers=3-5' cargo build --release
+The command line overrides these defaults.
 ";
 
 /// FAST-LIO's Mid-360 settings with the JT128's values where they differ,
@@ -87,7 +112,61 @@ struct Args {
     dump_input: Option<String>,
     max_frames: Option<usize>,
     threads: Option<usize>,
+    placement: Placement,
     lio: LioConfig,
+}
+
+/// A CPU list, or `any` for no restriction (to undo a built-in default).
+fn cpu_option(list: &str) -> Result<Option<Vec<usize>>, String> {
+    if list == "any" {
+        return Ok(None);
+    }
+    cpus::parse_list(list).map(Some)
+}
+
+/// Where `lio`'s threads may run (`--cpus`, `--pin`).
+#[derive(Clone, Default)]
+struct Placement {
+    process: Option<Vec<usize>>,
+    decode: Option<Vec<usize>>,
+    lio: Option<Vec<usize>>,
+    output: Option<Vec<usize>>,
+    workers: Option<Vec<usize>>,
+}
+
+impl Placement {
+    fn stages(&self) -> [(&'static str, &Option<Vec<usize>>); 4] {
+        [
+            ("decoding", &self.decode),
+            ("FAST-LIO", &self.lio),
+            ("output", &self.output),
+            ("workers", &self.workers),
+        ]
+    }
+
+    fn is_set(&self) -> bool {
+        self.process.is_some() || self.stages().iter().any(|(_, c)| c.is_some())
+    }
+
+    /// `--pin <stage>=<list>`.
+    fn pin(&mut self, spec: &str) -> Result<(), String> {
+        let (stage, list) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("--pin {spec:?}: expected <stage>=<CPUs>"))?;
+        let cpus = cpu_option(list)?;
+        match stage {
+            "decode" => self.decode = cpus,
+            "lio" => self.lio = cpus,
+            "output" => self.output = cpus,
+            "workers" => self.workers = cpus,
+            _ => {
+                return Err(format!(
+                    "--pin: unknown stage {stage:?} (decode, lio, output or workers)"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn floats<const N: usize>(s: &str) -> Result<[f64; N], String> {
@@ -118,6 +197,7 @@ fn parse_args() -> Result<Args, String> {
         dump_input: None,
         max_frames: None,
         threads: None,
+        placement: Placement::default(),
         lio: jt128_defaults(),
     };
     if mode == "replay" {
@@ -125,12 +205,15 @@ fn parse_args() -> Result<Args, String> {
     } else if mode != "live" {
         return Err(format!("unknown mode {mode:?}"));
     }
-    while let Some(flag) = it.next() {
+    let mut flags = BUILT_IN_ARGS.split_whitespace().map(String::from).chain(it);
+    while let Some(flag) = flags.next() {
         if flag == "--extrinsic-est" {
             a.lio.extrinsic_est_en = true;
             continue;
         }
-        let v = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        let v = flags
+            .next()
+            .ok_or_else(|| format!("{flag} needs a value"))?;
         let num = || v.parse::<f64>().map_err(|e| format!("{flag}: {e}"));
         match flag.as_str() {
             "--angles" => a.angles = v,
@@ -145,6 +228,8 @@ fn parse_args() -> Result<Args, String> {
             "--dump-input" => a.dump_input = Some(v),
             "--max-frames" => a.max_frames = Some(num()? as usize),
             "--threads" => a.threads = Some((num()? as usize).max(1)),
+            "--cpus" => a.placement.process = cpu_option(&v)?,
+            "--pin" => a.placement.pin(&v)?,
             "--extrinsic-r" => a.lio.extrinsic_r = floats::<9>(&v)?,
             "--extrinsic-t" => a.lio.extrinsic_t = floats::<3>(&v)?,
             "--time-offset" => a.lio.time_offset_lidar_to_imu = num()?,
@@ -430,28 +515,76 @@ fn write_outputs(
     Ok((rays, writing))
 }
 
-/// The fastest cores, on a chip with fast and slow ones whose capacities
-/// Linux reports (ARM big.LITTLE boards). Slow cores make FAST-LIO's short
-/// parallel loops wait, and idle workers spin.
-fn fast_cores() -> Option<usize> {
-    let capacity: Vec<u32> = (0..)
-        .map_while(|i| {
-            std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{i}/cpu_capacity")).ok()
-        })
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-    let max = *capacity.iter().max()?;
-    let fast = capacity.iter().filter(|&&c| c == max).count();
-    (fast < capacity.len()).then_some(fast)
+/// Applies `--cpus`, checks the `--pin` lists and starts the workers.
+/// Returns the placement left for the stage threads to apply.
+fn place_threads(a: &Args) -> Result<Placement, String> {
+    let mut placement = a.placement.clone();
+    if placement.is_set() && !cpus::CAN_PIN {
+        eprintln!("lio: pinning threads needs Linux; --cpus and --pin are ignored");
+        placement = Placement::default();
+    }
+    // Every thread started from here on inherits this.
+    if let Some(c) = &placement.process {
+        cpus::pin(c)?;
+    }
+    let allowed = cpus::allowed();
+    for (stage, list) in placement.stages() {
+        if let Some(c) = list.iter().flatten().find(|c| !allowed.contains(c)) {
+            return Err(format!(
+                "--pin {stage}: CPU {c} is not available to lio (it may use {})",
+                cpus::format_list(&allowed)
+            ));
+        }
+    }
+
+    // Slow cores of a big.LITTLE chip hold up FAST-LIO's short parallel loops
+    // while idle workers spin, so by default only the fast cores get workers.
+    // Zero leaves rayon's own default: RAYON_NUM_THREADS, else one per CPU.
+    let workers = a
+        .threads
+        .or(placement.workers.as_ref().map(Vec::len))
+        .or(cpus::fastest(&allowed).map(|f| f.len()))
+        .unwrap_or(0);
+    let mut pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .thread_name(|i| format!("lio-worker-{i}"));
+    if let Some(list) = placement.workers.clone() {
+        let one_each = list.len() == workers;
+        pool = pool.start_handler(move |i| {
+            let cpus = if one_each { &list[i..=i] } else { &list[..] };
+            if let Err(e) = cpus::pin(cpus) {
+                eprintln!("lio: worker {i}: {e}");
+            }
+        });
+    }
+    pool.build_global().map_err(|e| e.to_string())?;
+
+    if placement.is_set() {
+        let mut parts: Vec<String> = placement
+            .stages()
+            .iter()
+            .filter_map(|(stage, c)| {
+                c.as_ref()
+                    .map(|c| format!("{stage} on CPUs {}", cpus::format_list(c)))
+            })
+            .collect();
+        if let Some(c) = &placement.process {
+            parts.push(format!("the rest on CPUs {}", cpus::format_list(c)));
+        }
+        eprintln!(
+            "placement: {}; {} workers",
+            parts.join(", "),
+            rayon::current_num_threads()
+        );
+    }
+    Ok(placement)
 }
 
 fn run(a: Args) -> Result<(), String> {
-    if let Some(n) = a.threads.or_else(fast_cores) {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-            .map_err(|e| e.to_string())?;
+    if !BUILT_IN_ARGS.is_empty() {
+        eprintln!("built-in options: {BUILT_IN_ARGS}");
     }
+    let placement = place_threads(&a)?;
     let angles = AngleCorrection::parse(
         &std::fs::read_to_string(&a.angles).map_err(|e| format!("{}: {e}", a.angles))?,
     )
@@ -478,15 +611,36 @@ fn run(a: Args) -> Result<(), String> {
     let wall = Instant::now();
     let (event_tx, event_rx) = sync_channel(EVENT_QUEUE);
     let (frame_tx, frame_rx) = sync_channel(FRAME_QUEUE);
-    let (decoding, written) = std::thread::scope(|scope| {
-        let decoding = scope.spawn(|| decode(&a, &mut decoder, event_tx));
-        let estimating = scope.spawn(|| estimate(&mut estimator, event_rx, frame_tx));
-        // Returning drops `frame_rx`; the upstream stages then stop early if
-        // they are still running.
-        let written = write_outputs(&a, &mut outputs, frame_rx);
-        estimating.join().expect("FAST-LIO thread panicked");
-        (decoding.join().expect("decoder thread panicked"), written)
+    let pin = |c: &Option<Vec<usize>>| c.as_ref().map_or(Ok(()), |c| cpus::pin(c));
+    let (decoding, estimated, written) = std::thread::scope(|scope| {
+        // Named so they can be told apart in top -H, ps -L or htop.
+        let thread = |name: &str| std::thread::Builder::new().name(name.into());
+        let decoding = thread("lio-decode")
+            .spawn_scoped(scope, || {
+                pin(&placement.decode)?;
+                decode(&a, &mut decoder, event_tx)
+            })
+            .expect("starting the decoder thread");
+        let estimating = thread("lio-fastlio")
+            .spawn_scoped(scope, || {
+                pin(&placement.lio)?;
+                estimate(&mut estimator, event_rx, frame_tx);
+                Ok::<(), String>(())
+            })
+            .expect("starting the FAST-LIO thread");
+        // This thread takes the output stage. Returning drops `frame_rx`; the
+        // upstream stages then stop early if they are still running.
+        let written = (|| {
+            pin(&placement.output)?;
+            write_outputs(&a, &mut outputs, frame_rx)
+        })();
+        (
+            decoding.join().expect("decoder thread panicked"),
+            estimating.join().expect("FAST-LIO thread panicked"),
+            written,
+        )
     });
+    estimated?;
     let (decoding, (rays_busy, writing)) = (decoding?, written?);
     let wall = wall.elapsed();
 
@@ -558,6 +712,9 @@ fn main() -> ExitCode {
         },
         Err(e) => {
             eprintln!("lio: {e}\n\n{USAGE}");
+            if !BUILT_IN_ARGS.is_empty() {
+                eprintln!("This build's defaults: LIO_DEFAULT_ARGS='{BUILT_IN_ARGS}'");
+            }
             ExitCode::from(2)
         }
     }

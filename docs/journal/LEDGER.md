@@ -400,3 +400,36 @@ Follows the 09:50 entry above.
   - **Mapping loop:** the port takes 2.6 s on 4 threads. FAST-LIO at its best takes 6.2 s (2.3× slower), and as built for ARM 10.2 s (3.9×).
   - **The whole `lio replay`,** every ray included: 3.3 s (31× real time) in the container, 2.6–2.7 s (39×) natively. That morning it was 6.2–7.2 s natively.
 - **verdict → I was wrong** — A README draft said 0.25 m voxels cost only a few percent over 0.5 m. Measured, the run takes 34% longer (2.65 s against 1.98 s). Corrected before commit.
+
+### 11:36 · CPU placement, a smaller image, and pushing
+`session 2a591fe4` · `main` @ `1431551` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Follows the 11:08 entry above.
+
+- **decision** — The user: "it would be worth making this configurable at compile time … the core mapping. So on the real device, when I've got other programs running, I can basically pin them to specific cores … I would like to have some really good flexibility."
+  - **Built:**
+    - `--cpus <list>` confines the process.
+    - `--pin <stage>=<list>` confines one stage: decode, lio (FAST-LIO's serial steps), output, or workers. Workers get one CPU each when there are as many as CPUs listed, and `any` clears a restriction.
+    - `LIO_DEFAULT_ARGS` at build time (a `--build-arg` for the Dockerfile) compiles in defaults for any option; the command line overrides them.
+  - **Supporting changes:**
+    - Threads are named (`lio-decode`, `lio-fastlio`, `lio-worker-N`).
+    - The default worker count now counts only the fast cores among those the process may use.
+    - Pinning goes through `nix` (MIT, Linux only), since the code itself forbids `unsafe`. On macOS it is ignored, with a warning.
+- **test** — Linux, in the arm64 container, with the defaults built in (`--pin decode=0 --pin lio=1 --pin output=1 --pin workers=2-5`):
+  - **Placement:** `/proc` showed each thread allowed exactly its CPUs.
+  - **Output:** the frame CSV was identical across five layouts, unpinned included.
+  - **Speed:** pinned layouts ran 15–25% slower than unpinned there, but the VM's CPUs are virtual and move across the M4's fast and slow cores, so this says nothing about a board.
+- **test** — CPU cost of the whole pipeline natively on the M4, for 104 s of data. Two runs each agreed within 1%.
+
+  | Workers | Time | CPU time |
+  |---|---|---|
+  | 1 | 6.6 s | 9.4 s |
+  | 2 | 4.0 s | 9.9 s |
+  | 4 | 2.95 s | 11.7 s |
+  | 6 | 2.75 s | 14.4 s |
+  | 10 | 2.77 s | 20.1 s |
+
+  - Live, one worker uses about 9% of one M4 core.
+  - The user: "we are going for efficiency. So as long as it's fast enough, that's all right", and two sensors will come later.
+- **test** — The deployment image's runtime base moved from `debian:bookworm-slim` to `gcr.io/distroless/cc-debian12`. The image is now 49 MB, built for real this time now that the registry answers. The 4 GB images are the `fixtures/` development images.
+- **note** — The user allowed pushing to a private GitHub repository. This Mac can't authenticate to GitHub: there is no `gh`, the SSH key is not registered there, and the keychain holds no GitHub login. The push waits on the user signing in.

@@ -18,5 +18,9 @@ jt128.workspace = true
 lio-core.workspace = true
 rayon.workspace = true
 
+# Pinning threads to CPUs (`lio --cpus`, `--pin`).
+[target.'cfg(target_os = "linux")'.dependencies]
+nix.workspace = true
+
 [lints]
 workspace = true

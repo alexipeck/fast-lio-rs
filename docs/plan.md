@@ -103,6 +103,7 @@ This is what "exactly" means. Each row has to match the C++ cited, and is checke
 - **Motion compensation runs in parallel too,** replaying FAST-LIO's serial walk exactly (DEVIATIONS.md).
 - **`lio` runs three stages on their own threads:** decoding, FAST-LIO, then rays and output, joined by bounded queues. Each stage sees what it would see on one thread, so the output is byte-identical.
 - **The worker count defaults to the fast cores** where Linux reports core capacities (big.LITTLE boards). Slow cores hold up FAST-LIO's short parallel loops.
+- **Every thread can be placed:** `--cpus` confines the process, `--pin` confines one stage (decode, FAST-LIO, output, workers), and `LIO_DEFAULT_ARGS` builds defaults into the binary. Placement doesn't change the output. On a quiet M4, one worker costs 9% of a core in real time and four cost 11%.
 - **Measured against the C++** on the first capture, in one arm64 container (`fixtures/README.md`): the mapping loop runs 2.3× faster than FAST-LIO at its best (4 threads each), and 3.9× faster than FAST-LIO as its CMake builds it on ARM. The whole pipeline, rays included, runs at 31× real time there and 39× natively on the M4.
 - **Not done:** ikd-Tree rebuilds synchronously (DEVIATIONS.md), not on a background thread. Nothing so far points to a need.
 - **Profiling on the target ARM board** is still to come (open question 1).

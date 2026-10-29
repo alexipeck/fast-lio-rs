@@ -66,11 +66,42 @@ The settings are FAST-LIO's Mid-360 configuration except four JT128 defaults, me
 | `--frames-csv` | Per-frame state and diagnostics. |
 | `--map` | The final map, ASCII PCD. |
 
-**Threads:** `lio` decodes, runs FAST-LIO, and computes and writes the rays on three threads, joined by bounded queues; the outputs are the same as on one thread. The parallel parts use `--threads` workers. By default these are the fastest cores where Linux reports core capacities, as on ARM big.LITTLE boards, and otherwise one per CPU. Slow cores hold up FAST-LIO's short parallel loops: on the M4 (4 fast + 6 slow cores), 4 workers are nearly as fast as 10 on about 40% less CPU, and in a linux/arm64 container 10 workers take half as long again as 6.
+### Threads and CPUs
+
+`lio` runs three stages, each on its own thread, joined by bounded queues, plus a pool of workers:
+
+| Stage | Thread name | Work |
+|---|---|---|
+| `decode` | `lio-decode` | Receives and decodes the packets |
+| `lio` | `lio-fastlio` | FAST-LIO's serial steps: IMU propagation, the filter update, the map |
+| `output` | `lio` | Collects each frame's rays and writes the outputs |
+| `workers` | `lio-worker-N` | The parallel parts: FAST-LIO's matching and motion compensation, and the rays |
+
+The stages overlap: while FAST-LIO works on one frame, the decoder is already decoding the next and the output stage is writing the rays of the one before. A run therefore takes as long as its slowest stage, not the sum of all three. The outputs are the same as on one thread, whatever the number of workers or their placement.
+
+- **`--threads <n>`** sets the number of workers. By default these are the fastest cores where Linux reports core capacities, as on ARM big.LITTLE boards, and otherwise one per CPU.
+- **`--cpus <list>`** confines the whole process to a set of CPUs, as `taskset` does: `--cpus 4-7`.
+- **`--pin <stage>=<list>`** confines one stage, for example `--pin lio=4 --pin workers=5-7`. Workers get one CPU each when there are as many as CPUs listed. `any` removes a restriction.
+- Pinning needs Linux; elsewhere `lio` warns and ignores it.
+- **Built-in defaults:** any option can be built in, so a device image needs no flags. Set `LIO_DEFAULT_ARGS` when building, as in `LIO_DEFAULT_ARGS='--cpus 4-7' cargo build --release`, or with `--build-arg` for the `Dockerfile`. Options on the command line override the built-in ones.
+
+What each worker count costs on `room-2.pcap` (104 s of data, natively on an M4; the last column is the CPU the pipeline would use in real time, as a share of one M4 core):
+
+| Workers | Time | CPU time | Real-time CPU share |
+|---|---|---|---|
+| 1 | 6.6 s | 9.4 s | 9% |
+| 2 | 4.0 s | 9.9 s | 9.5% |
+| 4 | 2.95 s | 11.7 s | 11% |
+| 6 | 2.75 s | 14.4 s | 14% |
+| 10 | 2.77 s | 20.1 s | 19% |
+
+Beyond the fast cores, extra workers buy little speed for a lot of CPU, much of it spent spinning while they wait. For two sensors, run one `lio` per sensor, each with its own `--cpus`.
+
+### Embedding and containers
 
 **Embedding:** `lio::Pipeline` runs the same stages in another program, on the caller's thread: push each UDP payload, and every finished frame comes back with its rays. To spread the stages over threads as `lio` does, run a `jt128::Decoder`, a `lio::Estimator` and `lio::Processed::rays` on separate threads, passing events and frames along in order (`crates/lio/src/main.rs`).
 
-**Container:** the `Dockerfile` builds `lio` for the host's architecture, so an ARM board gets an arm64 image. Its usage is in the file's header. Only the sources go into the build context; `data/` never does.
+**Container:** the `Dockerfile` builds `lio` for the host's architecture, so an ARM board gets an arm64 image. The image is about 50 MB: the binary on Google's distroless base (glibc, no shell). Its usage is in the file's header. Only the sources go into the build context; `data/` never does. The multi-gigabyte images under `fixtures/` (FAST-LIO's C++ with PCL, and Hesai's SDK) are for development only.
 
 ## Sensor safety
 

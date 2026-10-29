@@ -5,6 +5,7 @@ big.LITTLE	computing		CPU with fast and slow cores (Apple M4: 4+6; RK3588: 4×A7
 boxplus	method	manifold plus operator	Applies a tangent-space increment to a manifold state; boxminus is the inverse difference	
 catkin	tool	ROS1 build system	Build system used by FAST_LIO main branch; ROS2 replaced it with ament/colcon	
 CustomMsg	format	livox_ros_driver/CustomMsg	Livox per-point packet message (offset_time, line, tag); parsed by Preprocess::avia_handler for Avia/Horizon/Mid-360	
+distroless	tool		Google's minimal container base images; lio's runtime image uses gcr.io/distroless/cc-debian12 (glibc and libgcc, no shell), about 50 MB with the binary	Dockerfile
 extrinsic	domain	LiDAR-to-IMU rigid transform	offset_R_L_I / offset_T_L_I in the state; seeded from mapping/extrinsic_R,T and optionally refined online when extrinsic_est_en is true	
 FAST-LIO	tool	Fast LiDAR-Inertial Odometry	hku-mars LiDAR-inertial odometry (FAST-LIO2 in its current form); the algorithm this repo implements, pinned at commit 7cc4175	README.md
 firetimes	format	per-channel firing-delay file	Hesai CSV (channel,firetime/us) giving each laser's firing offset; adds to per-point time and to azimuth correction	
@@ -16,12 +17,14 @@ IMU	domain	inertial measurement unit	Accelerometer and gyroscope; the JT128's bu
 iVox	method	incremental voxel map	Hash-of-voxels map from Faster-LIO; an alternative to ikd-Tree, not used because the Rust port follows FAST-LIO exactly	
 JT128	tool	Hesai JT128 hyper-hemispherical LiDAR	128-channel mini LiDAR (360 x ~187-189 deg, built-in IMU) that the Rust port targets; speaks Hesai UDP protocol v1.4	
 LIO	domain	LiDAR-Inertial Odometry	Pose estimation that fuses LiDAR scans with IMU readings; FAST-LIO is a tightly coupled LIO	
+LIO_DEFAULT_ARGS	project		Build-time environment variable: lio options compiled in as defaults, read before the command line (which overrides them); a Dockerfile build argument too	crates/lio/src/main.rs
 LIORAYS1	format	ray file magic	First 8 bytes of a lio --rays file; then per frame u32 count, f64 begin, f64 end, u8 kind and 40-byte ray records	crates/lio/src/lib.rs
 MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) that composes vect, SO3 and S2 into one state type with boxplus/boxminus	
 NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
 OpenMP	tool	Open Multi-Processing	C/C++ pragma-based threading; FAST-LIO uses it for its correspondence loop, enabled by its CMake only on x86 (MP_EN, 3 threads with more than 4 cores)	FAST_LIO CMakeLists.txt
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
 PCL	tool	Point Cloud Library	C++ library FAST-LIO uses for point types and VoxelGrid downsampling; only the fixtures image uses it	fixtures/README.md
+pinning	computing		Restricting a thread to chosen CPUs (CPU affinity, sched_setaffinity). lio --cpus pins the process, --pin <stage>=<list> one stage; Linux only	crates/lio/src/cpus.rs
 PTC	standard	Hesai TCP control protocol	Hesai's TCP command channel (SDK default port 9347); 0x05 returns angle calibration, 0xA9 returns firetimes	
 rayon	tool		Rust data-parallelism crate; runs lio-core's correspondence search on all cores, RAYON_NUM_THREADS sets the count	crates/lio-core/src/lio.rs
 REP-103	standard	ROS Enhancement Proposal 103	ROS axis convention (X forward, Y left, Z up); Hesai's frame is Y forward, X right	
