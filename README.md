@@ -2,7 +2,7 @@
 
 A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LIO) (FAST-LIO2) LiDAR-inertial odometry. It targets the Hesai JT128 and reads the sensor's UDP packets directly.
 
-> **Status:** M0 (skeleton), M3 (filter math: manifolds, process model, predict, IMU initialisation) and M4 (map: plane fit, voxel downsample, ikd-Tree) are done and pass golden tests against FAST-LIO's C++. Nothing runs end to end yet. See [docs/plan.md](docs/plan.md).
+> **Status:** working end to end on a real JT128 capture. The decoder, FAST-LIO's full mapping loop, per-point rays and the corrected path all run, at about 10× real time on an Apple M4. The math, map and update components pass golden tests against FAST-LIO's own C++. See [docs/plan.md](docs/plan.md) for what remains.
 
 ## What this is
 
@@ -20,6 +20,43 @@ A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LI
 | `crates/lio-core` | The FAST-LIO algorithm; no sensor or I/O code |
 | `crates/lio` | The `lio` binary: config, replay and live modes, outputs |
 | `fixtures/` | Docker-built C++ harnesses that run FAST-LIO's own code to produce golden test data. Development only |
+
+## Usage
+
+```bash
+cargo build --release
+```
+
+Replay a recording and write rays, the path and the map:
+
+```bash
+target/release/lio replay data/room-2.pcap \
+  --angles data/angle_correction.csv --firetimes data/firetimes.csv \
+  --extrinsic-r -1,0,0,0,-1,0,0,0,1 --blind 1.0 \
+  --rays rays.bin --path path.tum --frames-csv frames.csv --map map.pcd
+```
+
+Run live. It only listens on UDP, and `--max-seconds` is mandatory:
+
+```bash
+target/release/lio live --max-seconds 60 --bind 0.0.0.0:2368 \
+  --angles data/angle_correction.csv --firetimes data/firetimes.csv \
+  --extrinsic-r -1,0,0,0,-1,0,0,0,1 --blind 1.0 --rays rays.bin --path path.tum
+```
+
+- **`--extrinsic-r -1,0,0,0,-1,0,0,0,1`** is the JT128's IMU-to-LiDAR rotation, measured on the first capture: the IMU's x and y point opposite to the LiDAR's.
+- **`--blind 1.0`** drops returns within 1 m. A handheld hemispherical sensor sees its operator, and those points move with it.
+
+**Outputs:**
+
+| Output | Contents |
+|---|---|
+| `--rays` | For every raw point: time, LiDAR origin and unit beam direction in the path's world frame, range and intensity. Binary layout in `crates/lio/src/lib.rs` (`RayWriter`). |
+| `--path` | The corrected LiDAR pose at each frame end, TUM format (`t x y z qx qy qz qw`). |
+| `--frames-csv` | Per-frame state and diagnostics. |
+| `--map` | The final map, ASCII PCD. |
+
+**Embedding:** use `lio::Pipeline` to embed the same stage in another program. Push each UDP payload; every finished frame comes back with its rays.
 
 ## Sensor safety
 

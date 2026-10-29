@@ -77,6 +77,61 @@ impl<const N: usize> Mat<N, N> {
     pub fn trace(&self) -> f64 {
         (0..N).map(|i| self.0[i][i]).sum()
     }
+
+    /// Inverse by LU decomposition with partial pivoting, the method Eigen's
+    /// `inverse()` uses above 4×4. A singular matrix gives non-finite entries,
+    /// as in Eigen.
+    pub fn inverse(&self) -> Self {
+        let mut a: Vec<f64> = self.to_row_vec();
+        lu_inverse_in_place(&mut a, N);
+        Self::from_row_slice(&a)
+    }
+}
+
+/// Inverts the row-major `n`×`n` matrix in `a` in place (LU, partial pivoting).
+pub fn lu_inverse_in_place(a: &mut [f64], n: usize) {
+    let mut lu = a.to_vec();
+    let mut perm: Vec<usize> = (0..n).collect();
+    for k in 0..n {
+        let p = (k..n).fold(k, |best, i| {
+            if lu[i * n + k].abs() > lu[best * n + k].abs() {
+                i
+            } else {
+                best
+            }
+        });
+        if p != k {
+            for j in 0..n {
+                lu.swap(k * n + j, p * n + j);
+            }
+            perm.swap(k, p);
+        }
+        let pivot = lu[k * n + k];
+        for i in k + 1..n {
+            let f = lu[i * n + k] / pivot;
+            lu[i * n + k] = f;
+            for j in k + 1..n {
+                lu[i * n + j] -= f * lu[k * n + j];
+            }
+        }
+    }
+    for col in 0..n {
+        // Solve L·U·x = P·e_col.
+        let mut x: Vec<f64> = (0..n)
+            .map(|i| if perm[i] == col { 1.0 } else { 0.0 })
+            .collect();
+        for i in 0..n {
+            let s: f64 = (0..i).map(|j| lu[i * n + j] * x[j]).sum();
+            x[i] -= s;
+        }
+        for i in (0..n).rev() {
+            let s: f64 = (i + 1..n).map(|j| lu[i * n + j] * x[j]).sum();
+            x[i] = (x[i] - s) / lu[i * n + i];
+        }
+        for i in 0..n {
+            a[i * n + col] = x[i];
+        }
+    }
 }
 
 impl<const R: usize> Mat<R, 1> {

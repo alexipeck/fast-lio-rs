@@ -8,10 +8,13 @@
 pub mod esekf;
 pub mod ikd_tree;
 pub mod imu_init;
+pub mod imu_process;
+pub mod lio;
 pub mod mat;
 pub mod plane;
 pub mod point;
 pub mod process;
+pub mod rays;
 pub mod s2;
 pub mod so3;
 pub mod state;

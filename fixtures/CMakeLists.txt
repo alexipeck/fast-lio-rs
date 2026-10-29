@@ -16,7 +16,7 @@ if(NOT EXISTS "${FAST_LIO_DIR}/include/use-ikfom.hpp")
 endif()
 
 find_package(Eigen3 REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common kdtree filters)
+find_package(PCL REQUIRED COMPONENTS common kdtree filters io)
 find_package(OpenMP REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -39,3 +39,10 @@ target_link_libraries(gen_m3 PRIVATE fast_lio_src)
 
 add_executable(gen_m4 src/gen_m4.cpp)
 target_link_libraries(gen_m4 PRIVATE fast_lio_src ikd_tree)
+
+# Whole FAST-LIO mapping loop on a recorded input (see src/run_fastlio.cpp).
+add_executable(run_fastlio src/run_fastlio.cpp)
+target_link_libraries(run_fastlio PRIVATE fast_lio_src ikd_tree)
+
+add_executable(gen_m5 src/gen_m5.cpp)
+target_link_libraries(gen_m5 PRIVATE fast_lio_src)

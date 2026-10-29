@@ -313,6 +313,12 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 | Clock | Calendar-form UTC. Sensor time runs 0.367 s behind the capture host, so the sensor is not synced to the host |
 | IMU temperature | 34.9 °C rising to 37.2 °C over 104 s |
 
+**Found when running FAST-LIO on the capture:**
+- **IMU-to-LiDAR rotation: 180° about z** (`extrinsic_R = [-1,0,0, 0,-1,0, 0,0,1]`). The IMU's x and y point opposite to the LiDAR's.
+  - Among the eight axis-aligned candidates that keep z up or down, only this one gives a bounded path over the first 30 s: at most 3.8 m from start against hundreds of metres for the others.
+  - It also matches about twice as many points to planes.
+- **The operator is in view.** From about 0.3 s in, about 25% of beams return nothing and a further quarter of the returns fall within 0.5 m. Those points move with the sensor, so `blind` must be about 1 m for handheld use.
+
 **Decoder rules that follow:**
 - **Spin-up packets.** Drop packets whose two block azimuths don't advance by about 0.4°. The first 66 packets after wake (~15 ms) report azimuth 0 for both blocks while the motor spins up.
 - **IMU.** De-duplicate and stamp as described in §7.

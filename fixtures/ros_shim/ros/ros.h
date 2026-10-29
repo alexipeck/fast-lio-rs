@@ -1,5 +1,6 @@
 #pragma once
-// Minimal stand-in for <ros/ros.h>: time, header, publisher placeholder and logging.
+// Minimal stand-in for <ros/ros.h>: time, header, logging, and inert node,
+// publisher, subscriber and rate types so laserMapping.cpp compiles.
 #include <cassert>
 #include <cstdio>
 #include <string>
@@ -11,7 +12,22 @@ struct Time {
   Time &fromSec(double s) { sec_ = s; return *this; }
   static Time now() { return Time(); }
 };
-struct Publisher {};
+struct Publisher {
+  template <class M> void publish(const M &) const {}
+};
+struct Subscriber {};
+struct NodeHandle {
+  template <class T, class D> bool param(const std::string &, T &v, const D &d) { v = d; return true; }
+  template <class... A> Subscriber subscribe(A &&...) { return {}; }
+  template <class M> Publisher advertise(const std::string &, int) { return {}; }
+};
+struct Rate {
+  explicit Rate(double) {}
+  void sleep() {}
+};
+inline void init(int &, char **, const std::string &) {}
+inline void spinOnce() {}
+inline bool ok() { return true; }
 inline int &info_count() { static int n = 0; return n; }
 }  // namespace ros
 

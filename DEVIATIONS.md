@@ -1,18 +1,34 @@
 # Deviations from FAST-LIO
 
-By default this implementation behaves exactly like hku-mars/FAST_LIO at commit `7cc4175`. Every exception gets an entry here. Each entry gives:
-- what differs;
-- why;
-- whether it is on by default, and its config switch;
-- the C++ location it departs from.
+By default this implementation behaves exactly like hku-mars/FAST_LIO at commit `7cc4175`. Every exception is listed here with what differs, why, and where in the C++ it departs.
 
 ## Always on
 
-These fix memory-safety defects in the C++. They do not change results for inputs the C++ handles correctly.
+These fix memory-safety defects in the C++. They don't change results for inputs the C++ handles correctly.
 
-None implemented yet. Planned:
+- **`res_last` and `point_selected_surf` are sized to the scan.** In the C++ they are fixed 100,000-element arrays (`src/laserMapping.cpp:76`, `:94`), and more than 100,000 downsampled points write past their end. Here they are `Vec`s that grow with the scan (`lio-core/src/lio.rs`).
 
-- `res_last` and `point_selected_surf` become sized to the scan instead of being fixed 100 000-element arrays. In the C++ (`src/laserMapping.cpp:76`, `:94`), more than 100 000 downsampled points write past their end.
+## JT128 input (FAST-LIO has no JT128 handler)
+
+- **Preprocessing** follows FAST-LIO's Velodyne/Ouster handlers (`src/preprocess.cpp`): keep every `point_filter_num`-th point in arrival order, then drop points within `blind`. Each point's time comes from the decoder, so the yaw-based time estimate those handlers fall back on is never used.
+- **The decoder departs from Hesai's SDK in three places**, all in `docs/hesai_jt128_decoder.md`:
+  - Spin-up packets, whose block azimuths don't advance, are dropped.
+  - Zero-range points (no return) are dropped.
+  - IMU samples that the SDK's value comparison would merge are split back out.
+- **IMU timestamps are packet arrival times.** The JT128's IMU counter field is always 0, so samples are stamped with the time of the packet that first carries them. The resulting latency can be offset with `--time-offset` (`time_offset_lidar_to_imu`).
+
+## Outputs FAST-LIO doesn't have
+
+These read the estimator's results and never feed back into it.
+
+- **Per-point rays** (`lio-core/src/rays.rs`): origin, unit direction and range for every raw point, not only the downsampled ones FAST-LIO uses.
+  - Each point's pose is interpolated from its frame's IMU timeline and anchored to the corrected end-of-frame state, the way FAST-LIO places points in its map.
+  - Points not later than a frame's first timeline pose are extrapolated from it. FAST-LIO leaves them uncompensated in its own map; that affects at most a point or two per frame.
+- **Frames before IMU initialisation get rays too**, from the current state as a constant pose. The sensor must be still during that time anyway.
+- **The corrected path** in TUM format, the per-frame CSV, and the ASCII PCD map.
+  - FAST-LIO publishes its odometry before filling in that frame's covariance.
+  - FAST-LIO's covariance has position and rotation blocks swapped relative to ROS's order.
+  - No covariance is written here yet.
 
 ## Opt-in (off by default)
 
@@ -27,3 +43,5 @@ These don't change anything the algorithm can observe: map contents, search resu
 - **ikd-Tree nodes live in an index-addressed arena,** not behind raw pointers.
 - **Voxel downsampling sorts stably.** PCL uses an unstable spreadsort, so within a voxel the order points are summed in, and the last bit of a centroid, is unspecified even in C++.
 - **Linear algebra is hand-written** to Eigen's formulas. The reference fixtures are built with `-ffp-contract=off`, because GCC fuses multiply-adds on aarch64 by default and Rust never does. With that, plane fits and k-nearest distances match bit for bit.
+- **The correspondence search runs on all cores** (`rayon`). FAST-LIO's CMake enables its OpenMP loop only on x86. Results are gathered in index order, as the C++ does after its loop, so the output doesn't depend on thread count.
+- **`ImuProcess::last_lidar_end_time_` starts at 0.** The C++ never initialises it. FAST-LIO's global instance gets fresh, zeroed memory at startup, so it reads 0 in practice.
