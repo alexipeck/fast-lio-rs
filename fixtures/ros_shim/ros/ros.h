@@ -3,6 +3,8 @@
 // publisher, subscriber and rate types so laserMapping.cpp compiles.
 #include <cassert>
 #include <cstdio>
+#include <iomanip>  // real ROS headers bring it in; laserMapping.cpp uses setw
+#include <iostream>
 #include <string>
 
 namespace ros {
