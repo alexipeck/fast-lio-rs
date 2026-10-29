@@ -189,3 +189,22 @@ Continuation of the 00:40 entry above.
   - At roughly 2–3 µs per update on the M4, raw rate needs about 3.5 s of compute per second, and more on an ARM board.
   - Per-point poses for every raw point are still feasible by propagating the latest state to each point's time. That is cheap and parallel, and an output addition rather than a change to the estimator.
 - **claim** — Of the FAST-LIO work, the SO3 and matrix code, voxel downsample, decoder and fixtures approach carry over. FAST-LIO's S2 gravity, predict/update and ikd-Tree do not, because Point-LIO uses vect3 gravity, its own estimator and iVox. Point-LIO's `esti_plane` still needs diffing against FAST-LIO's.
+
+### 01:28 · Is map search needed at all? IMU-only timeline measured
+`session 2a591fe4` · `main` @ `f6afbd3` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 01:17 entry above.
+
+- **rebuttal** — The user asked: "Why is there any search needed at all? I need every point processed, but I don't really need a pose for each point, I need what I described, a vector and a length."
+  - Their requirement: turn each 100 ms of IMU data into a position and rotation timeline, then give every point its time-interpolated origin, beam direction and range.
+  - If Point-LIO is the way forward, it becomes a new crate in this repo. If their IMU-timeline approach wins, it goes in a fresh repo.
+- **test** — Rotation from the JT128 IMU alone on `room-2.pcap`, handheld part, gyro bias-corrected:
+  - Bias 0.14 °/s, which uncorrected adds 0.014° per 100 ms.
+  - Rotation per 100 ms window: median 1.17°, 95th percentile 6.35°, max 15.5°. Per 50 ms: median 0.60°, 95th percentile 3.25°.
+  - Constant-rate interpolation between 200 Hz samples errs by about 0.0045° at the 99th-percentile angular acceleration (1447 °/s²).
+- **claim** — Map search isn't needed to produce rays. It exists only to correct the timeline. Within one window the IMU alone gives:
+  - **Rotation:** excellent, per the numbers above.
+  - **Translation:** only once a start velocity is known. The IMU can't observe velocity, and integrating acceleration from rest drifts within seconds. With a known start velocity, gravity-direction and accelerometer-bias errors cost under 1 mm over 100 ms.
+  - Ignoring translation leaves each sweep's origin off by up to v·Δt: about 10–15 cm per 100 ms at walking pace, half that if referenced to mid-sweep.
+  - A world frame that stays fixed across sweeps additionally needs drift correction, i.e. LIO.
+- **decision** — Pending the user's answer: if each sweep can stand alone (its own frame, translation ignored or supplied), go IMU-only in a fresh repo. Otherwise do the Point-LIO crate here. The per-point ray stage is the same in both designs.
