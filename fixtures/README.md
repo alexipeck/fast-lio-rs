@@ -33,10 +33,30 @@ Generation is deterministic: a fixed seed, and the inputs are written next to th
 | `golden/m4.json` | `src/gen_m4.cpp` | `esti_plane` (float, 62 neighbourhoods incl. rank-deficient), PCL `VoxelGrid` (4 clouds incl. the index-overflow passthrough), ikd-Tree: build plus 5 rounds of downsampled insert, plain insert, box delete and 40 k-NN queries, with points placed exactly on voxel and box faces |
 | `golden/m5.json` | `src/gen_m5.cpp` | Motion compensation through `ImuProcess::Process` (3 still frames, then 3 turning and accelerating frames of 400 points), and the iterated update with fixed point-to-plane matches (200 and 10 measurements, online extrinsic estimation on) |
 
-`src/run_fastlio.cpp` runs FAST-LIO's whole mapping loop. `src/laserMapping.cpp` is compiled unchanged, with its `main` renamed out of the way, and fed an input recorded by `lio replay --dump-input`. It writes the same per-frame CSV as `lio --frames-csv`. On the first JT128 capture (the data stays local), Rust and C++ agree on every frame's point counts and to about 1 µm in position until the estimate meets a chaotic stretch about 48 s in:
+`src/run_fastlio.cpp` runs FAST-LIO's whole mapping loop. `src/laserMapping.cpp` is compiled unchanged, with its `main` renamed out of the way, and fed an input recorded by `lio replay --dump-input`. It writes the same per-frame CSV as `lio --frames-csv`. Its settings default to FAST-LIO's Mid-360 configuration, so pass the JT128 values `lio` uses (the recorded input already has `blind` and `point_filter_num` applied):
 
 ```bash
-docker run --rm -v "$PWD/data:/data" fast-lio-rs-fixtures /build/run_fastlio /data/input.bin /data/cpp_frames.csv extrinsic_R=-1,0,0,0,-1,0,0,0,1
+docker run --rm -v "$PWD/data:/data" fast-lio-rs-fixtures /build/run_fastlio /data/input.bin /data/cpp_frames.csv \
+  extrinsic_R=-1,0,0,0,-1,0,0,0,1 filter_size_surf=0.25 filter_size_map=0.25
 ```
 
-The image builds with `-ffp-contract=off`, so the reference uses plain IEEE arithmetic (no fused multiply-add) and gives the same bits on every architecture.
+The results on the first JT128 capture (the data stays local) are in [DEVIATIONS.md](../DEVIATIONS.md#floating-point-differences). In short, the two agree to the last bit in single precision until PCL's unspecified voxel order, or a fused multiply-add inside Eigen, changes a last bit. A chaotic stretch of the data then grows that difference, exactly as it does between two builds of FAST-LIO itself.
+
+The image builds with `-ffp-contract=off`, so the compiler adds no fused multiply-adds of its own; Rust never does. Eigen's NEON kernels still use some in double precision.
+
+## Hesai SDK reference
+
+`hesai/` builds Hesai LiDAR SDK 2.0 at a pinned commit with `jt128_dump`, which decodes a JT128 pcap. It writes the points of chosen frames and every IMU sample as CSV. The `jt128` crate's `sdk_reference` test compares the decoder against them. The CSVs are decoded capture data, so they stay in `data/`:
+
+```bash
+docker build -t fast-lio-rs-hesai fixtures/hesai
+docker run --rm -v "$PWD/data:/data" fast-lio-rs-hesai /data/room-2.pcap \
+  /data/angle_correction.csv /data/firetimes.csv /data/sdk_points.csv /data/sdk_imu.csv 100 101
+cargo test --release -p jt128 --test sdk_reference -- --ignored --nocapture
+```
+
+On `room-2.pcap`, SDK frames 100 and 101 come out the same: 227,318 points with bit-identical coordinates, and times within 4 ns, the resolution of `dt_ms`. All 20,784 of the SDK's IMU samples match ours by value. The SDK stamps 48 of them one packet (about 222 µs) later than we do:
+- the capture's first sample, because the SDK spends the first packet detecting the lidar type;
+- every sample whose value first arrives in the packet that starts a new frame, on which the SDK finishes the previous one.
+
+We use the time of the first packet that carries the value.

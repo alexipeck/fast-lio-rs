@@ -293,7 +293,11 @@ The two files come from different places:
 5. Whether +Y points to the sensor's marked front.
 6. The 20 Hz block spacing (§4.2).
 
-Items 1–4 are answered in §11 from `room-2.pcap`. Items 5 and 6, and the IMU's x/y axes, are still open.
+Items 1–4 are answered in §11 from `room-2.pcap`, and so are the IMU's x/y axes (180° about z from the LiDAR's).
+- Item 5 needs a look at the unit.
+- Item 6 needs a 20 Hz capture.
+
+The decoder reproduces Hesai SDK 2.0's points bit for bit, and all of its IMU samples (`fixtures/README.md`, "Hesai SDK reference").
 
 ## 11. Measured on `room-2.pcap`
 
