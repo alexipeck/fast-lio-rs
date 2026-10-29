@@ -10,6 +10,17 @@ File and line references to C++ code (`src/…`, `include/…`) point into [hku-
 - Development works from pcaps you record.
 - Deployment target is an ARM single-board computer.
 
+**Decided 2026-10-29**
+- **The output is a ray for every raw point,** not a pose per frame. For each of the ~1.15 M points/s:
+  - **origin:** the LiDAR's position at the point's own time;
+  - **direction:** the unit beam direction;
+  - **range.**
+
+  Both origin and direction are in the full-path world frame. They come from FAST-LIO's per-frame IMU timeline (`IMU_Processing.hpp:238-336`, interpolated per point), anchored to that frame's LiDAR-corrected end pose. The corrected full path is emitted alongside.
+- **`lio` is a feeder stage** for the user's processing pipeline. A 10 Hz angular depth map may be added as a consumer of the same rays.
+- **FAST-LIO stays the algorithm.** Motion in the real use case is smooth. An IMU-only timeline drifts 3 m in 10 s on the first capture, so the LiDAR correction is required. Point-LIO was evaluated and deferred; it could become a separate crate later.
+- **The built-in 200 Hz IMU is used for now.** A 12,794 Hz IMU may replace it once mounted with known offsets.
+
 ## Ground rules
 
 1. **The algorithm is followed exactly.** FAST_LIO `main` @ `7cc4175` defines the behaviour: the estimator, motion compensation, map management and every constant.
@@ -37,7 +48,7 @@ A Cargo workspace:
 |---|---|---|
 | `jt128` | Turns UDP packets plus calibration files into `Frame` and `ImuSample`. Covers pcap reading, frame splitting, per-point time, IMU de-duplication by counter, and unit conversion. Follows `docs/hesai_jt128_decoder.md`. | none of the others |
 | `lio-core` | The algorithm: state and manifold operations, IMU propagation, motion compensation, voxel downsample, ikd-Tree, plane fit, the iterated update, and map management. It knows nothing about sensors or I/O. `rayon` (MIT OR Apache-2.0). Linear algebra is a small hand-written fixed-size module (`mat`, `so3`), decided in M3: its formulas mirror Eigen's term for term, and it needs no dependency |
-| `lio` (bin) | Config (YAML, same keys as FAST_LIO's `config/*.yaml`), threads, replay (pcap) and live (UDP) modes, outputs (odometry stream, PCD map, trajectory file). | the two above |
+| `lio` (bin) | Config (YAML, same keys as FAST_LIO's `config/*.yaml`), threads, replay (pcap) and live (UDP) modes, outputs (per-point rays, the corrected path, optionally a PCD map). | the two above |
 | `fixtures` (dev only) | C++ harnesses that run FAST_LIO's own math on canned inputs and write golden files. Built in Docker. Not shipped. | Eigen, FAST_LIO headers |
 
 The interface between the crates is fixed early, in `jt128`:
@@ -150,11 +161,11 @@ sudo timeout 35 tcpdump -i <iface> -s 0 -B 65536 -w 01_still.pcap udp port 2368
 | # | Deliverable | Done when |
 |---|---|---|
 | M0 | New repo: GPL-2.0 `LICENSE`, README with attribution, this plan, the decoder spec, a Cargo workspace, CI (`fmt`, `clippy`, `test`, `cargo-deny` licenses), a Docker image for `fixtures/` | CI green on an empty skeleton; the fixtures image builds FAST_LIO's headers; `cargo-deny` rejects an Apache-2.0-only crate |
-| M1 | Capture session #1 (you) | pcaps and calibration files in the repo's `data/` (git-ignored, or LFS) |
-| M2 | `jt128` decoder | Matches the Hesai SDK on the M1 pcaps; the checklist in §10 of the decoder spec is answered |
+| M1 | Capture session #1 (you) | pcaps and calibration files in the repo's `data/` (git-ignored). **Status:** `data/room-2.pcap` received 2026-10-28 (104 s, stationary then handheld). This unit's angle-correction file is pending; firetimes use the SDK's model-level file |
+| M2 | `jt128` decoder: pcap reader, calibration files, points with per-point time, frame cutting, IMU de-duplication | Matches the Hesai SDK on `room-2.pcap`; the checklist in §10 of the decoder spec is answered |
 | M3 | `lio-core` math: state, manifold ops, process model, predict, IMU init | Golden tests pass |
 | M4 | `lio-core` map: voxel downsample, ikd-Tree, plane fit | Golden tests pass, including ikd-Tree operation sequences |
-| M5 | `lio-core` pipeline: motion compensation, iterated update, map window and increment. Replay mode in `lio` | Golden tests for the update pass; the synthetic test is within tolerance; replay is deterministic; odometry on the M1 pcaps |
+| M5 | `lio-core` pipeline: motion compensation, iterated update, map window and increment. Per-point ray output and the full corrected path. Replay mode in `lio` | Golden tests for the update pass; the synthetic test is within tolerance; replay is deterministic; rays and path on the M1 pcaps |
 | M6 | Validation and performance | Real-data metrics recorded; profiled on the ARM board (`aarch64-unknown-linux-gnu`, already installed here); container image for that board; holds 10 Hz in real time |
 | M7 | Live mode | Live UDP run under your project's lifecycle, with `--max-seconds` enforced |
 
@@ -177,5 +188,5 @@ M1 can run alongside M0 and M3. M2 needs M1's pcaps. M3 and M4 depend only on M0
    - Cores and memory set how much of the JT128's ~1.15 M points/s survives `point_filter_num` and the voxel downsample at 10 Hz.
    - On big.LITTLE boards, the `rayon` pool may need pinning to the big cores.
    - Needed before M6.
-2. **Outputs.** What will consume the odometry? Your other project, a file, a socket? Needed before M5.
-3. **Getting recordings here.** Copy them into the new repo's `data/` folder, or some other path? Needed at M1.
+2. **Ray transport and latency.** Where do the rays go (in-process, shared memory, socket, file), and in what layout? One record per point, or one pose per firing block plus per-point time offsets? Rays are final only after each frame's correction, up to about 100 ms plus processing. Should provisional, IMU-predicted rays go out sooner? Needed before M5.
+3. **IMU and LiDAR axes.** How the IMU's x/y axes line up with the LiDAR's, and whether +Y faces the marked front. Both are to be settled from `room-2.pcap` once rays can be rendered.
