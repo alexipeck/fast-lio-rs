@@ -335,3 +335,35 @@ Continuation of the 03:23 entry above.
   - Zero range noise leaves a 2–3 cm offset, so the bias is geometric.
   - 0.5 m voxels are 3× worse than 0.25 m (58 mm, 0.54°), as on the real capture.
   - A sparse 32-beam layout over 140° gave 1°-level errors: rings 4.5° apart make the 5-neighbour plane fits nearly collinear.
+
+### 09:50 · Speed against FAST-LIO's C++, and a slow matrix helper
+`session 2a591fe4` · `main` @ `6cd15f4` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Follows the 03:40 entry above.
+
+- **rebuttal** — The user asked: "Did you compare performance between the C++ and Rust?" Answer: no. The 12× real-time figure was the port alone. The plan held off on speed claims until the board arrives.
+- **test** — First head-to-head, both on the same recorded input (`--dump-input`), in one linux/arm64 container on the M4, timing the mapping loop only:
+  - FAST-LIO as its CMake builds it on ARM (serial): 12.0 s.
+  - FAST-LIO at `-O3 -DNDEBUG` with OpenMP: 10.8 s on 1 thread, 7.9 s on 4.
+  - The port: 11.7 s on 1 thread, 9.5 s on 4, 11.4 s on 10.
+  - **Verdict:** before this fix the port was no faster than the C++. With OpenMP on, the C++ was 20% faster.
+- **test** — Stage timers on both sides, 1 thread:
+  - The port won at matching (3.7 s against 5.9 s) and downsampling (0.5 s against 0.9 s).
+  - It lost at undistortion (6.8 s against 4.9 s), all of it in the per-point compensation loop (6.6 s against 3.8 s).
+- **verdict → bug found** — `mat.rs` implemented `+`, `-`, negation and scalar `*` and `/` with `iter_mut().flatten()`. LLVM did not unroll those loops, even for 3×3. In `exp_rate` that loop also sat between the `sin` and `cos` calls, so they were not merged into one `sincos` as GCC does for FAST-LIO.
+  - **Fix:** plain row and column loops, and `sin_cos()`. The operations and their order are unchanged.
+  - **Check:** the per-frame CSV is bit-identical before and after on macOS and on linux/arm64 (glibc's `sincos` matches its `sin` and `cos`). The golden tests pass, and the replay is still deterministic across thread counts.
+- **test** — After the fix, medians of three interleaved runs in the container:
+
+  | Build | 1 thread | 4 threads | 10 threads |
+  |---|---|---|---|
+  | C++, FAST-LIO's own flags | 12.6 s | — | — |
+  | C++, `-DNDEBUG`, OpenMP | 11.8 s | 8.4 s | 9.7 s |
+  | Port | 6.5 s | 4.6 s | 6.9 s |
+
+  - The port is 1.8× faster than the C++ at its best, and 2.8× faster than FAST-LIO as built for ARM.
+  - Undistortion in the port now takes 1.9 s against 4.8 s.
+  - FAST-LIO's own flags with OpenMP at 3 threads (its x86 choice): 10.0 s.
+- **test** — The whole `lio replay`, which adds decoding and all 114.6 M rays: 12–13× real time natively, 10× in the container. The mapping loop is about 4 s of it natively, so the decoder and the rays now take about half the time. Both run on one thread.
+- **verdict → I was wrong** — `docs/plan.md` listed the decoder on its own thread and ikd-Tree background rebuilds as speed measures. Neither was ever built. Corrected in the plan.
+- **note** — The timing tools: `crates/lio/examples/run_input.rs` (the Rust twin of `run_fastlio`), and `proc_ms` in `run_fastlio`, which was always 0 before. Results are in `fixtures/README.md`.

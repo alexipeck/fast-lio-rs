@@ -50,7 +50,9 @@ pub fn exp_rate(ang_vel: &Vec3, dt: f64) -> Mat3 {
     if norm > 0.0000001 {
         let k = (*ang_vel / norm).hat();
         let r_ang = norm * dt;
-        Mat3::identity() + k * r_ang.sin() + k * (1.0 - r_ang.cos()) * k
+        // One sincos call, as GCC emits for FAST-LIO's adjacent sin and cos.
+        let (sin, cos) = r_ang.sin_cos();
+        Mat3::identity() + k * sin + k * (1.0 - cos) * k
     } else {
         Mat3::identity()
     }

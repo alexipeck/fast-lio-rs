@@ -99,10 +99,12 @@ This is what "exactly" means. Each row has to match the C++ cited, and is checke
 - **The correspondence loop runs in parallel with `rayon` on every architecture.** The C++ turns OpenMP off on ARM.
   - Results are written per point by index, then reduced serially in index order, exactly as the C++ does after its parallel loop. The output does not depend on how many threads run.
 - **No global state, and buffers are allocated once.** The C++ allocates a `vector` per point in its hot loop (`laserMapping.cpp:663`), and allocates new clouds for every publish.
-- **The decoder runs on its own thread**, feeding the estimator through a bounded channel.
-- **ikd-Tree rebuilds on a background thread**, as in the C++. Rust ownership replaces the pthread-and-raw-pointer protocol.
 - **Replay is deterministic:** the same pcap gives byte-identical output. A test enforces this.
-- **Profiling happens on the target ARM board** (open question 1). No speed claims until then.
+- **Measured against the C++** on the first capture, in one arm64 container (`fixtures/README.md`): the mapping loop runs 1.8× faster than FAST-LIO at its best (4 threads each), and 2.8× faster than FAST-LIO as its CMake builds it on ARM.
+- **Not done (planned at first, not needed so far):**
+  - The decoder runs inline, not on its own thread. With every ray computed, the decoder and the rays now take about half of the pipeline's time.
+  - ikd-Tree rebuilds synchronously (DEVIATIONS.md), not on a background thread.
+- **Profiling on the target ARM board** is still to come (open question 1).
 
 ## Validation
 
@@ -170,7 +172,7 @@ sudo timeout 35 tcpdump -i <iface> -s 0 -B 65536 -w 01_still.pcap udp port 2368
 | M3 | `lio-core` math: state, manifold ops, process model, predict, IMU init | Golden tests pass. **Status:** done |
 | M4 | `lio-core` map: voxel downsample, ikd-Tree, plane fit | Golden tests pass, including ikd-Tree operation sequences. **Status:** done; the plane fit is bit-identical to Eigen's |
 | M5 | `lio-core` pipeline: motion compensation, iterated update, map window and increment. Per-point ray output and the full corrected path. Replay mode in `lio` | Golden tests for the update pass; the synthetic test is within tolerance; replay is deterministic; rays and path on the M1 pcaps. **Status:** done 2026-10-29. Against FAST-LIO's C++ on the same real input: see DEVIATIONS.md. Replay is bit-identical across runs and thread counts (`crates/lio/tests/replay.rs`). The synthetic test (`crates/lio-core/tests/synthetic.rs`, a JT128-like LiDAR in a box room) puts end poses within 13 mm and 0.12° of the truth, with ray end points at a 10 mm median. FAST-LIO's C++ lands on the same trajectory from the same input, so that error is its corner bias, not the port. Within each frame, rays add at most 2 mm and 0.02° |
-| M6 | Validation and performance | Real-data metrics recorded; profiled on the ARM board (`aarch64-unknown-linux-gnu`, already installed here); container image for that board; holds 10 Hz in real time. **Status:** partly done. Metrics are recorded (README, DEVIATIONS.md). The `Dockerfile` builds and runs on linux/arm64, at 9× real time in Docker on the M4. Waiting on the board for profiling |
+| M6 | Validation and performance | Real-data metrics recorded; profiled on the ARM board (`aarch64-unknown-linux-gnu`, already installed here); container image for that board; holds 10 Hz in real time. **Status:** partly done. Metrics are recorded (README, DEVIATIONS.md). The `Dockerfile` builds and runs on linux/arm64, at 10× real time in Docker on the M4. Timed against FAST-LIO's C++ in one container: the mapping loop is 1.8× faster than FAST-LIO at its best (fixtures/README.md). Waiting on the board for profiling |
 | M7 | Live mode | Live UDP run under your project's lifecycle, with `--max-seconds` enforced. **Status:** implemented (`lio live`, listen-only). Tested only against a local replay of `room-2.pcap` over UDP; the sensor run is yours to schedule |
 
 M1 can run alongside M0 and M3. M2 needs M1's pcaps. M3 and M4 depend only on M0.

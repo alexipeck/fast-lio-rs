@@ -18,14 +18,17 @@ LIO	domain	LiDAR-Inertial Odometry	Pose estimation that fuses LiDAR scans with I
 LIORAYS1	format	ray file magic	First 8 bytes of a lio --rays file; then per frame u32 count, f64 begin, f64 end, u8 kind and 40-byte ray records	crates/lio/src/lib.rs
 MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) that composes vect, SO3 and S2 into one state type with boxplus/boxminus	
 NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
+OpenMP	tool	Open Multi-Processing	C/C++ pragma-based threading; FAST-LIO uses it for its correspondence loop, enabled by its CMake only on x86 (MP_EN, 3 threads with more than 4 cores)	FAST_LIO CMakeLists.txt
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
 PCL	tool	Point Cloud Library	C++ library FAST-LIO uses for point types and VoxelGrid downsampling; only the fixtures image uses it	fixtures/README.md
 PTC	standard	Hesai TCP control protocol	Hesai's TCP command channel (SDK default port 9347); 0x05 returns angle calibration, 0xA9 returns firetimes	
+rayon	tool		Rust data-parallelism crate; runs lio-core's correspondence search on all cores, RAYON_NUM_THREADS sets the count	crates/lio-core/src/lio.rs
 REP-103	standard	ROS Enhancement Proposal 103	ROS axis convention (X forward, Y left, Z up); Hesai's frame is Y forward, X right	
 REP-145	standard	ROS Enhancement Proposal 145	Requires sensor_msgs/Imu in m/s^2 and rad/s; Hesai's ROS driver publishes g and deg/s	
 S2	domain	2-sphere manifold	Unit-sphere state type with 2 DOF; FAST-LIO stores gravity as S2 so its magnitude stays fixed at 9.81	
 SDK	tool	software development kit	Here Hesai LiDAR SDK 2.0, the reference the jt128 decoder is checked against	fixtures/README.md
 SIMD	computing	single instruction, multiple data	Vector instructions (NEON on ARM, SSE/AVX on x86); Eigen's SIMD reductions fix the summation order the plane fit reproduces	DEVIATIONS.md
+sincos	computing		libm call returning sine and cosine of one angle together; GCC and LLVM merge adjacent sin and cos into it, with the same results as separate calls	crates/lio-core/src/imu_process.rs
 spreadsort	method	Boost.Sort spreadsort	Unstable radix-based sort PCL 1.12's VoxelGrid uses; leaves the summation order within a voxel unspecified	DEVIATIONS.md
 TUM	format	TUM RGB-D trajectory format	One pose per line: t x y z qx qy qz qw; the format of lio --path	README.md
 UDP 1.4	standard	Hesai point-cloud UDP protocol v1.4	Packet format shared by Pandar128, OT128 and JT128; byte 4 >= 137 marks JT128	

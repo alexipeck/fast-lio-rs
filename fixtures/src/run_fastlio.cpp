@@ -6,6 +6,10 @@
 // FAST-LIO's buffers the way its callbacks would, then runs the body of
 // FAST-LIO's main loop after each event.
 //
+// proc_ms is the wall time from the event that completes a frame to its row:
+// the callback, sync_packages and the loop body. Reading the input is not
+// counted; `run_input` in crates/lio times the Rust side the same way.
+//
 // Usage: run_fastlio <input.bin> <frames.csv> [key=value ...]
 //   keys: max_iteration filter_size_surf filter_size_map cube_side_length
 //         det_range gyr_cov acc_cov b_gyr_cov b_acc_cov extrinsic_est_en
@@ -15,6 +19,7 @@
 #include "laserMapping.cpp"
 #undef main
 
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <sstream>
@@ -35,19 +40,26 @@ std::vector<double> numbers(const std::string &s) {
   return v;
 }
 
+using Clock = std::chrono::steady_clock;
+Clock::time_point frame_start;
+double total_ms = 0;
+
 template <class T>
 bool read_val(std::FILE *f, T &v) {
   return std::fread(&v, sizeof(T), 1, f) == 1;
 }
 
 void write_row(std::FILE *out, int index, const char *kind, int down, int eff) {
+  double ms = std::chrono::duration<double, std::milli>(Clock::now() - frame_start).count();
+  total_ms += ms;
   state_ikfom s = kf.get_x();
   V3D p = s.pos + s.rot * s.offset_T_L_I;
   Eigen::Quaterniond q = s.rot * s.offset_R_L_I;
-  std::fprintf(out, "%d,%s,%.6f,%.6f,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,0\n",
+  std::fprintf(out, "%d,%s,%.6f,%.6f,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.3f\n",
                index, kind, Measures.lidar_beg_time, Measures.lidar_end_time, down, eff,
                ikdtree.Root_Node ? ikdtree.validnum() : 0, p.x(), p.y(), p.z(), q.w(), q.x(), q.y(), q.z(),
-               s.vel[0], s.vel[1], s.vel[2], s.bg[0], s.bg[1], s.bg[2], s.ba[0], s.ba[1], s.ba[2]);
+               s.vel[0], s.vel[1], s.vel[2], s.bg[0], s.bg[1], s.bg[2], s.ba[0], s.ba[1], s.ba[2], ms);
+  frame_start = Clock::now();
 }
 
 }  // namespace
@@ -122,6 +134,7 @@ int main(int argc, char **argv) {
       msg->header.stamp.fromSec(v[0]);
       msg->linear_acceleration.x = v[1]; msg->linear_acceleration.y = v[2]; msg->linear_acceleration.z = v[3];
       msg->angular_velocity.x = v[4]; msg->angular_velocity.y = v[5]; msg->angular_velocity.z = v[6];
+      frame_start = Clock::now();
       imu_cbk(msg);
     } else if (tag == 2) {
       double beg;
@@ -139,6 +152,7 @@ int main(int argc, char **argv) {
       cloud->width = n;
       cloud->height = 1;
       // standard_pcl_cbk, after p_pre->process.
+      frame_start = Clock::now();
       mtx_buffer.lock();
       if (beg < last_timestamp_lidar) lidar_buffer.clear();
       lidar_buffer.push_back(cloud);
@@ -198,6 +212,6 @@ int main(int argc, char **argv) {
     }
   }
   std::fclose(out);
-  std::fprintf(stderr, "frames: %d\n", index);
+  std::fprintf(stderr, "frames: %d, processing %.1f ms\n", index, total_ms);
   return 0;
 }

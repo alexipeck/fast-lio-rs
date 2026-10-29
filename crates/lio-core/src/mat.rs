@@ -215,8 +215,10 @@ impl<const R: usize, const C: usize> Add for Mat<R, C> {
 
 impl<const R: usize, const C: usize> AddAssign for Mat<R, C> {
     fn add_assign(&mut self, o: Self) {
-        for (a, b) in self.0.iter_mut().flatten().zip(o.0.iter().flatten()) {
-            *a += b;
+        for (ra, rb) in self.0.iter_mut().zip(&o.0) {
+            for c in 0..C {
+                ra[c] += rb[c];
+            }
         }
     }
 }
@@ -231,8 +233,10 @@ impl<const R: usize, const C: usize> Sub for Mat<R, C> {
 
 impl<const R: usize, const C: usize> SubAssign for Mat<R, C> {
     fn sub_assign(&mut self, o: Self) {
-        for (a, b) in self.0.iter_mut().flatten().zip(o.0.iter().flatten()) {
-            *a -= b;
+        for (ra, rb) in self.0.iter_mut().zip(&o.0) {
+            for c in 0..C {
+                ra[c] -= rb[c];
+            }
         }
     }
 }
@@ -240,7 +244,11 @@ impl<const R: usize, const C: usize> SubAssign for Mat<R, C> {
 impl<const R: usize, const C: usize> Neg for Mat<R, C> {
     type Output = Self;
     fn neg(mut self) -> Self {
-        self.0.iter_mut().flatten().for_each(|a| *a = -*a);
+        for row in &mut self.0 {
+            for a in row {
+                *a = -*a;
+            }
+        }
         self
     }
 }
@@ -248,7 +256,11 @@ impl<const R: usize, const C: usize> Neg for Mat<R, C> {
 impl<const R: usize, const C: usize> Mul<f64> for Mat<R, C> {
     type Output = Self;
     fn mul(mut self, s: f64) -> Self {
-        self.0.iter_mut().flatten().for_each(|a| *a *= s);
+        for row in &mut self.0 {
+            for a in row {
+                *a *= s;
+            }
+        }
         self
     }
 }
@@ -263,7 +275,11 @@ impl<const R: usize, const C: usize> Mul<Mat<R, C>> for f64 {
 impl<const R: usize, const C: usize> Div<f64> for Mat<R, C> {
     type Output = Self;
     fn div(mut self, s: f64) -> Self {
-        self.0.iter_mut().flatten().for_each(|a| *a /= s);
+        for row in &mut self.0 {
+            for a in row {
+                *a /= s;
+            }
+        }
         self
     }
 }

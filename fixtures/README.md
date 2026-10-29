@@ -44,6 +44,36 @@ The results on the first JT128 capture (the data stays local) are in [DEVIATIONS
 
 The image builds with `-ffp-contract=off`, so the compiler adds no fused multiply-adds of its own; Rust never does. Eigen's NEON kernels still use some in double precision.
 
+### Speed against the C++
+
+`crates/lio/examples/run_input.rs` is the Rust twin of `run_fastlio`: same input, same arguments, same CSV. In both, `proc_ms` is the wall time from the input event that completes a frame to its row; reading the input is not counted. `run_fastlio` prints the total at the end.
+
+```bash
+cargo run --release -p lio --example run_input -- data/input.bin data/rust_frames.csv \
+  extrinsic_R=-1,0,0,0,-1,0,0,0,1 filter_size_surf=0.25 filter_size_map=0.25
+```
+
+Results on `room-2.pcap` (1,037 frames over 103.9 s, JT128 settings), both in one linux/arm64 container on an Apple M4 (10 CPUs). Each figure is the median of three interleaved runs of the mapping loop alone:
+
+| Build | Threads | Seconds | × real time |
+|---|---|---|---|
+| FAST-LIO with its own CMake flags (`-O3 -g`, asserts on). On ARM its CMake leaves OpenMP off | 1 | 12.6 | 8.2 |
+| The same, OpenMP on, at the 3 threads its CMake picks on large x86 machines | 3 | 10.0 | 10.4 |
+| FAST-LIO at `-O3 -DNDEBUG` with OpenMP | 1 / 2 / 4 / 10 | 11.8 / 9.4 / 8.4 / 9.7 | 8.8 / 11.1 / 12.4 / 10.8 |
+| This port | 1 / 2 / 4 / 10 | 6.5 / 5.0 / 4.6 / 6.9 | 16.0 / 20.8 / 22.8 / 15.0 |
+
+The C++ builds here keep GCC's default fused multiply-adds. Ten threads are slower than four for both: the matching loop is too short per frame to pay for waking them.
+
+Where the time goes, single-threaded, in seconds for the whole capture:
+
+| Stage | C++ | Rust |
+|---|---|---|
+| Undistortion (`UndistortPcl`) | 4.8 | 1.9 |
+| Matching (`h_share_model`) | 5.6 | 3.2 |
+| Downsampling (PCL `VoxelGrid`) | 0.8 | 0.5 |
+| Rest of the iterated update | 0.2 | 0.4 |
+| `map_incremental` | 0.1 | 0.1 |
+
 ## Hesai SDK reference
 
 `hesai/` builds Hesai LiDAR SDK 2.0 at a pinned commit with `jt128_dump`, which decodes a JT128 pcap. It writes the points of chosen frames and every IMU sample as CSV. The `jt128` crate's `sdk_reference` test compares the decoder against them. The CSVs are decoded capture data, so they stay in `data/`:

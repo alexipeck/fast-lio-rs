@@ -2,8 +2,9 @@
 
 A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LIO) (FAST-LIO2) LiDAR-inertial odometry. It targets the Hesai JT128 and reads the sensor's UDP packets directly.
 
-> **Status:** working end to end on a real JT128 capture: the decoder, FAST-LIO's full mapping loop, per-point rays and the corrected path. It runs at about 12× real time on an Apple M4 and 9× in a linux/arm64 container on the same machine.
+> **Status:** working end to end on a real JT128 capture: the decoder, FAST-LIO's full mapping loop, per-point rays and the corrected path. The whole pipeline runs at about 12× real time on an Apple M4 and 10× in a linux/arm64 container on the same machine.
 >
+> - **Speed against the C++:** the port's mapping loop runs 1.8× faster than FAST-LIO's C++ at its best, in the same arm64 container on the same input: 4.6 s against 8.4 s for the 104 s capture. Against FAST-LIO as its CMake builds it on ARM, it is 2.8× faster ([fixtures/README.md](fixtures/README.md#speed-against-the-c)).
 > - **Decoder:** reproduces Hesai's SDK point for point.
 > - **Filter and map:** fed the same input, it reproduces FAST-LIO's own C++ to the last bit in single precision and to about 1e-16 in double. On long runs, chaotic stretches of the data grow those last-bit differences to millimetres or centimetres. FAST-LIO shows the same spread against itself ([DEVIATIONS.md](DEVIATIONS.md#floating-point-differences)).
 > - **Rays, against ground truth:** a synthetic JT128-like run in a box room puts ray end points at a 10 mm median and 24 mm at worst. FAST-LIO's C++ gets the same trajectory from the same input.
