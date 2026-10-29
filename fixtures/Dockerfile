@@ -16,6 +16,7 @@ RUN git clone https://github.com/hku-mars/FAST_LIO.git /src/FAST_LIO \
 
 COPY CMakeLists.txt /fixtures/
 COPY src /fixtures/src
+COPY ros_shim /fixtures/ros_shim
 RUN cmake -S /fixtures -B /build -DFAST_LIO_DIR=/src/FAST_LIO -DCMAKE_BUILD_TYPE=Release \
  && cmake --build /build -j"$(nproc)"
 

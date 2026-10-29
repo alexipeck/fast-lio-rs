@@ -36,7 +36,7 @@ A Cargo workspace:
 | Crate | What it is | Depends on |
 |---|---|---|
 | `jt128` | Turns UDP packets plus calibration files into `Frame` and `ImuSample`. Covers pcap reading, frame splitting, per-point time, IMU de-duplication by counter, and unit conversion. Follows `docs/hesai_jt128_decoder.md`. | none of the others |
-| `lio-core` | The algorithm: state and manifold operations, IMU propagation, motion compensation, voxel downsample, ikd-Tree, plane fit, the iterated update, and map management. It knows nothing about sensors or I/O. | `glam` (MIT OR Apache-2.0, used under MIT) for 3-D types; `faer` (MIT) or a small hand-written fixed-size module for the 23×23 / N×12 algebra; `rayon` (MIT OR Apache-2.0) |
+| `lio-core` | The algorithm: state and manifold operations, IMU propagation, motion compensation, voxel downsample, ikd-Tree, plane fit, the iterated update, and map management. It knows nothing about sensors or I/O. `rayon` (MIT OR Apache-2.0). Linear algebra is a small hand-written fixed-size module (`mat`, `so3`), decided in M3: its formulas mirror Eigen's term for term, and it needs no dependency |
 | `lio` (bin) | Config (YAML, same keys as FAST_LIO's `config/*.yaml`), threads, replay (pcap) and live (UDP) modes, outputs (odometry stream, PCD map, trajectory file). | the two above |
 | `fixtures` (dev only) | C++ harnesses that run FAST_LIO's own math on canned inputs and write golden files. Built in Docker. Not shipped. | Eigen, FAST_LIO headers |
 

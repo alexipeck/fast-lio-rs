@@ -4,3 +4,11 @@
 //! What "exactly" covers is listed in the algorithm contract in `docs/plan.md`.
 //! Departures from the C++ are listed in `DEVIATIONS.md`. This crate has no
 //! sensor or I/O code.
+
+pub mod esekf;
+pub mod imu_init;
+pub mod mat;
+pub mod process;
+pub mod s2;
+pub mod so3;
+pub mod state;

@@ -17,4 +17,16 @@ docker run --rm fast-lio-rs-fixtures
 - it does one ikd-Tree k-nearest search;
 - it prints the results as JSON.
 
-The golden-data generators for each milestone go next to it.
+The golden-data generators for each milestone go next to it. `ros_shim/` provides just enough of ROS's headers for FAST-LIO's ROS-coupled sources (such as `IMU_Processing.hpp`) to compile unchanged.
+
+To regenerate every golden file in `golden/`:
+
+```bash
+fixtures/generate.sh
+```
+
+Generation is deterministic: a fixed seed, and the inputs are written next to the outputs.
+
+| File | Generator | Covers |
+|---|---|---|
+| `golden/m3.json` | `src/gen_m3.cpp` | MTK exp/log/A-matrix, S2 operations, state boxplus/boxminus/oplus, process model and Jacobians, 40 predict steps, IMU initialisation via `ImuProcess::Process` |

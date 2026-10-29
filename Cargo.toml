@@ -12,8 +12,8 @@ publish = false
 [workspace.dependencies]
 jt128 = { path = "crates/jt128" }
 lio-core = { path = "crates/lio-core" }
-glam = "0.34"
 rayon = "1.12"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

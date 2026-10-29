@@ -21,8 +21,14 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   fixtures:
-    runs-on: ubuntu-24.04
+    # Golden files are generated on arm64; Eigen's SIMD rounding differs on x86_64,
+    # so the byte-for-byte check runs on the same architecture.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
       - run: docker build -t fast-lio-rs-fixtures fixtures
       - run: docker run --rm fast-lio-rs-fixtures
+      - name: Golden files match the committed ones
+        run: |
+          docker run --rm fast-lio-rs-fixtures /build/gen_m3 > "$RUNNER_TEMP/m3.json"
+          cmp "$RUNNER_TEMP/m3.json" fixtures/golden/m3.json

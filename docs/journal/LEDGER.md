@@ -41,3 +41,26 @@ This session began in the FAST_LIO checkout. Its earlier entries cover the analy
   - Met: the fixtures image builds and runs; `cargo-deny` rejects Apache-2.0-only crates; the skeleton passes the local equivalents of every CI step.
   - Not exercised: the GitHub Actions workflow itself, because the repo has no remote yet.
   - Nothing is committed.
+
+### 23:27 · M3: filter math implemented and matched against FAST-LIO
+`session 70807f77` · `main` @ `aea2ea4` · [transcript](transcripts/2026-10-28--70807f77.jsonl)
+
+Continuation of the 23:12 entry above.
+
+- **decision** — The user said "Yes, stop asking for permission to work". M0 was committed as `aea2ea4`. From here, milestones and local commits proceed without asking. Publishing, remotes and anything touching the sensor still need their OK.
+- **decision** — Linear algebra in `lio-core` is a hand-written fixed-size module (`mat`, `so3`) instead of `glam`/`faer`. Its quaternion product, vector rotation, `toRotationMatrix` and quaternion-from-matrix mirror Eigen's formulas term for term. `glam` was removed; the only dependency is `rayon`.
+- **claim** — IKFoM writes `scalar(1/2)` in three places: `esekfom.hpp:312` and `:344` in predict, and `S2.hpp:277` in `S2_Mx`. Integer division makes that scale 0, so `exp(..)` is exactly the identity. In practice:
+  - FAST-LIO's predict uses an identity diagonal block for the rotation states, not `Exp(−ω·dt)`.
+  - `S2_Mx` with a nonzero delta omits its rotation term.
+
+  The Rust code reproduces this, with comments explaining why.
+- **decision** — Fixtures gained `ros_shim/`: plain message structs, a `ros::Time` and logging macros. With it, FAST-LIO's ROS-coupled `src/IMU_Processing.hpp` compiles unchanged, so IMU initialisation is golden-tested through the real `ImuProcess::Process`.
+- **test** — All 7 M3 golden tests pass on the first run against `fixtures/golden/m3.json`:
+  - `cos_sinc` (13 cases), SO3 exp (48), log (42), A-matrix (12), S2 operations (11 directions, including both antipodal branches);
+  - state boxplus/boxminus/oplus (10), process model and Jacobians (10);
+  - 40 chained predict steps, with x and P checked at every step to 1e-12 relative;
+  - IMU init over 3 frames. P matches with zero tolerance, and `done` turns true on frame 3, after more than 10 samples.
+- **test** — Mutation check on a throwaway copy: setting the rotation block to the textbook `Exp(−ω·dt)` fails `predict_sequence` at step 0. The relative error is 2.4e-5 against a 1e-12 tolerance, so the tests do detect the `scalar(1/2)` behaviour.
+- **test** — Golden generation is deterministic: two runs of `fixtures/generate.sh` gave the same SHA-1, `212988fc…`.
+- **decision** — The CI fixtures job runs on `ubuntu-24.04-arm` and checks the regenerated golden file byte for byte. The data was generated on arm64, and Eigen's SIMD rounding differs on x86_64.
+- **note** — `THIRD_PARTY_NOTICES.md` gained MTK's Universitaet Bremen BSD notice, because `so3.rs` and `s2.rs` follow MTK's formulas.
