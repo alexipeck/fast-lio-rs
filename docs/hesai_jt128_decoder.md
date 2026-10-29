@@ -255,7 +255,18 @@ Nothing in the SDK relates the IMU's axes to the LiDAR's. The LiDAR transform pa
 
 ## 8. Calibration files [SDK]
 
-These are per-unit files. The copies in the SDK's `correction/` folder are only samples. Pull your own unit's files over PTC or export them with Hesai's tools.
+The two files come from different places:
+
+- **Angle correction is per-unit factory calibration, stored on the sensor.**
+  - When connected live, the SDK downloads it over PTC (`lidar.h` `LoadCorrectionForUdpParser`). It has a `SaveCorrectionFile` helper that writes it to disk.
+  - In PCAP mode, the SDK needs it as a file.
+  - Fetch it once, while the sensor is awake under its own management, and keep it with the unit. Hesai's PandarView 2 can also export it.
+- **Firetimes are model-level for the JT128.** The SDK fetches firetimes over PTC only for ATX and QT128. For the JT128 it always loads a file. Use the SDK's `correction/firetime_correction/JT128_Firetime Correction File.csv`, or Hesai's download for the model.
+
+**PTC request** (version 1, plain TCP, port 9347; `PtcParser/include/ptc_1_0_parser.h`):
+- Send 8 bytes: `47 74 <cmd> 00 00 00 00 00`. That is identifier `0x47 0x74`, the command, a return code of 0, and a big-endian u32 payload length of 0.
+- The reply starts with the same 8-byte header, carrying the return code (0 means success) and the payload length, followed by the payload.
+- Command `0x05` returns the angle-correction CSV text described below, as the SDK passes it straight to its CSV parser.
 
 **Angle correction (CSV)**
 - Header `Channel,Elevation,Azimuth`. There is also a variant whose first line is `EEFF`, followed by one more line to skip.

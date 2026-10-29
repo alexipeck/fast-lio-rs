@@ -138,3 +138,25 @@ Continuation of the 23:43 entry above.
   - Twist is never set.
 
   The plan is to emit a correct covariance and the velocity in the Rust output.
+
+### 00:40 · Output rate, IMU de-duplication, calibration sourcing
+`session 2a591fe4` · `main` @ `1f3b759` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+This continues the conversation logged above under `session 70807f77` (00:28 entry); the session id changed when it was resumed. This block covers only the latest turn.
+
+- **rebuttal** — The user rejected per-frame output: "One pose per LiDAR frame is a problem, there is simply too much physical motion in 100ms (10 Hz)." They also called the JT128's 200 Hz IMU "very low". They have a 12,794 Hz IMU that is not yet mounted.
+- **claim** — FAST-LIO already models motion inside each 100 ms frame: it propagates at every IMU sample and corrects each point. The limit is how often a pose comes out and how late, not the estimate.
+  - It processes a frame only after IMU data passes the frame end, and publishes one pose for the frame's end.
+  - The per-sample states it computes are used only for motion correction.
+  - Higher-rate output needs an addition: forward IMU propagation from the latest corrected state. That doesn't change the estimator.
+- **claim** — Shorter LiDAR frames are a decoder choice, so FAST-LIO's maths is unchanged. With Hesai's sample angle file, channel azimuth offsets cluster at 135–225°. Channels below 60° elevation then cover about 225° of the horizon in a half rotation (50 ms) and about 135° in a quarter (25 ms).
+- **claim** — De-duplication is required:
+  - Each 200 Hz sample repeats in about 22 packets. Fed through raw, FAST-LIO would run 22× the predicts.
+  - It would also add about 22× less process noise, because the noise term is `(dt·F_w) Q (dt·F_w)ᵀ`, which scales with dt² per step.
+  - IMU initialisation, which needs more than 10 samples, would finish on about 11 copies of one sample.
+- **test** — The `lio-core` predict step takes 4.09 µs on the M4 in release mode. That is 0.08% of a core at 200 Hz and 5.2% at 12,794 Hz.
+- **claim** — Calibration sourcing, from `lidar.h:295-342` and the PTC parser:
+  - The angle correction is per-unit and stored on the sensor. Fetch it with PTC 1.0 command `0x05` on TCP 9347, request bytes `47 74 05 00 00 00 00 00`, which returns CSV text.
+  - The SDK never fetches firetimes for the JT128 (only for ATX and QT128); it always loads a file. The SDK ships `JT128_Firetime Correction File.csv`.
+  - The user does not need to produce either file.
+- **decision** — The capture was moved to `data/room-2.pcap` (git-ignored), with the user's permission.
