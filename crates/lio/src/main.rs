@@ -54,9 +54,9 @@ four JT128 values given here):
 
 performance:
   --threads <n>          worker threads for FAST-LIO's matching, motion
-                         compensation and the rays (default: one per CPU).
-                         On big.LITTLE chips the number of big cores uses far
-                         less CPU for nearly the same speed. Decoding and
+                         compensation and the rays. Default: the fastest
+                         cores, where Linux reports core capacities (ARM
+                         big.LITTLE boards), else one per CPU. Decoding and
                          FAST-LIO's serial steps run on two more threads.
 ";
 
@@ -430,8 +430,23 @@ fn write_outputs(
     Ok((rays, writing))
 }
 
+/// The fastest cores, on a chip with fast and slow ones whose capacities
+/// Linux reports (ARM big.LITTLE boards). Slow cores make FAST-LIO's short
+/// parallel loops wait, and idle workers spin.
+fn fast_cores() -> Option<usize> {
+    let capacity: Vec<u32> = (0..)
+        .map_while(|i| {
+            std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{i}/cpu_capacity")).ok()
+        })
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let max = *capacity.iter().max()?;
+    let fast = capacity.iter().filter(|&&c| c == max).count();
+    (fast < capacity.len()).then_some(fast)
+}
+
 fn run(a: Args) -> Result<(), String> {
-    if let Some(n) = a.threads {
+    if let Some(n) = a.threads.or_else(fast_cores) {
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global()
@@ -514,11 +529,12 @@ fn run(a: Args) -> Result<(), String> {
         );
     }
     eprintln!(
-        "  busy: decoding {:.2} s, FAST-LIO {:.2} s, rays {:.2} s and writing {:.2} s, on three threads",
+        "  busy: decoding {:.2} s, FAST-LIO {:.2} s, rays {:.2} s and writing {:.2} s, on three threads with {} workers",
         secs(decoding),
         secs(lio_busy),
         secs(rays_busy),
-        secs(writing)
+        secs(writing),
+        rayon::current_num_threads()
     );
     eprintln!(
         "path: {:.2} m travelled, furthest {:.2} m from start, ends at [{:.3}, {:.3}, {:.3}]",

@@ -367,3 +367,36 @@ Follows the 03:40 entry above.
 - **test** — The whole `lio replay`, which adds decoding and all 114.6 M rays: 12–13× real time natively, 10× in the container. The mapping loop is about 4 s of it natively, so the decoder and the rays now take about half the time. Both run on one thread.
 - **verdict → I was wrong** — `docs/plan.md` listed the decoder on its own thread and ikd-Tree background rebuilds as speed measures. Neither was ever built. Corrected in the plan.
 - **note** — The timing tools: `crates/lio/examples/run_input.rs` (the Rust twin of `run_fastlio`), and `proc_ms` in `run_fastlio`, which was always 0 before. Results are in `fixtures/README.md`.
+
+### 11:08 · System load, then the decoder and ray stages
+`session 2a591fe4` · `main` @ `7460ba5` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Follows the 09:50 entry above.
+
+- **rebuttal** — The user asked: "Did you take into account my system load? … I did have a higher system load just before, but it's free now." Answer: only partly. The runs were interleaved and medians taken, which keeps load from favouring either side, but load was neither measured nor controlled.
+- **test** — Rerun on a quiet machine: five interleaved runs each, with the host's load logged (2.2–4.4 including the benchmark) and the VM's (0–2). Spreads were 6% or less.
+  - Every figure came out 20–25% lower than at 09:50. The ratios held: the port was still 1.9× faster than FAST-LIO at its best, and 3.0× faster than FAST-LIO as its CMake builds it on ARM.
+  - **Verdict:** the earlier load slowed both sides alike, so the comparison stood. The absolute times did not.
+- **decision** — The user: "speed up the decoder and ray stage next. Do it here. Do whatever you need to get this into a really good state."
+- **test** — Each change was checked against the previous build by hashing all three outputs of the full capture: the 4.6 GB ray stream, the per-frame CSV and the path. Unless noted, all three stayed byte-identical.
+  - **The decoder** computes each channel's elevation sin and cos once, not per point.
+  - **The ray writer** encodes a frame into one buffer, instead of making 9 `write_all` calls per ray.
+  - **`lio` runs three stages on their own threads,** joined by bounded queues: decoding, FAST-LIO, then rays and writing. `lio::Estimator` and `lio::Processed` expose the stages for embedding.
+  - **Live mode, retested on a localhost UDP replay** (the sensor was not touched): 53,828 packets with no gaps. It stopped at `--max-seconds`, and its 120 frames are identical to replay's.
+- **test** — FAST-LIO's backward compensation now runs in parallel. A pass on times alone replays the serial walk to give each point its segment.
+  - **A C++ quirk, replicated:** the walk stays on the first point once it reaches it, so that point is compensated again for every earlier segment whose head it is later than.
+  - **Unit test:** it checks the parallel result bit for bit against the serial loop, over five cases (including that one and an out-of-order pose). With the replication removed, the test fails.
+- **test** — Rays now compose everything but `Exp(ω·dt)` once per IMU segment, and apply `Exp` per point with Rodrigues' formula.
+  - **Not byte-identical:** of the 20,451,438 rays in the first 200 frames, one differs, in the last bit of a float. The full stream's hash changes; the frame CSV and the path do not.
+  - **Unit test:** it bounds the difference against the full composition.
+  - **Speed:** with one worker, the ray stage's time fell from 6.1 s to 2.3 s.
+- **test** — Tried and rejected:
+  - A parallel sort of the voxel index made the mapping loop slower at every thread count.
+  - A parallel sort in undistortion sped up the mapping loop alone (2.6 → 2.2 s on 4 threads). In the full pipeline it lost (2.86–2.89 s against 2.63–2.72 s on 6), competing with the ray stage.
+- **decision** — `--threads` sets the worker count. It defaults to the fastest cores where Linux reports core capacities (ARM big.LITTLE boards), else one per CPU.
+  - **Why:** on the M4, 4 workers cost 41% less CPU than 10 for 8% more time.
+  - **In the container,** where the VM reports all 10 cores equal, 10 workers take 5.1 s against 3.3 s for 6.
+- **test** — Final figures, in one arm64 container on a quiet machine (medians of three interleaved runs):
+  - **Mapping loop:** the port takes 2.6 s on 4 threads. FAST-LIO at its best takes 6.2 s (2.3× slower), and as built for ARM 10.2 s (3.9×).
+  - **The whole `lio replay`,** every ray included: 3.3 s (31× real time) in the container, 2.6–2.7 s (39×) natively. That morning it was 6.2–7.2 s natively.
+- **verdict → I was wrong** — A README draft said 0.25 m voxels cost only a few percent over 0.5 m. Measured, the run takes 34% longer (2.65 s against 1.98 s). Corrected before commit.

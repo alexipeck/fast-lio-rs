@@ -24,6 +24,7 @@ These read the estimator's results and never feed back into it.
 - **Per-point rays** (`lio-core/src/rays.rs`): origin, unit direction and range for every raw point, not only the downsampled ones FAST-LIO uses.
   - Each point's pose is interpolated from its frame's IMU timeline and anchored to the corrected end-of-frame state, the way FAST-LIO places points in its map.
   - Points not later than a frame's first timeline pose are extrapolated from it. FAST-LIO leaves them uncompensated in its own map; that affects at most a point or two per frame.
+  - Everything but `Exp(ω·dt)` is composed once per IMU segment, and `Exp(ω·dt)` is applied to each point's vectors with Rodrigues' formula. Against composing every point's pose in full, one ray in 20 million differs, in its last float bit.
 - **Frames before IMU initialisation get rays too**, from the current state as a constant pose. The sensor must be still during that time anyway.
   - Their reported state carries the configured extrinsic. FAST-LIO's own state only receives it when the initialisation completes, so the C++ would place those frames with an identity mounting: 180° off on the JT128.
   - This is the only difference in the per-frame CSV against the C++ harness, and it shows only in its first row or two.
@@ -45,6 +46,10 @@ These don't change anything the algorithm can observe: map contents, search resu
 - **ikd-Tree nodes live in an index-addressed arena,** not behind raw pointers.
 - **Linear algebra is hand-written** to Eigen's formulas. The reference fixtures are built with `-ffp-contract=off`, because GCC fuses multiply-adds on aarch64 by default and Rust never does.
 - **The correspondence search runs on all cores** (`rayon`). FAST-LIO's CMake enables its OpenMP loop only on x86. Results are gathered in index order, as the C++ does after its loop, so the output doesn't depend on thread count.
+- **Motion compensation runs on all cores too.** The C++ walks the points back from the newest (`UndistortPcl`). Here that walk is replayed on times alone to find each point's IMU segment, then every point is compensated on its own with the same arithmetic.
+  - The C++ walk stops moving once it reaches the first point. That point is then compensated again for every earlier segment whose head it is later than. This is replicated.
+  - A unit test checks the result bit for bit against the serial loop, including that case.
+- **`sync_packages` moves the frame's cloud** out of the buffer instead of copying it; the C++ copies a pointer.
 - **`ImuProcess::last_lidar_end_time_` starts at 0.** The C++ never initialises it. FAST-LIO's global instance gets fresh, zeroed memory at startup, so it reads 0 in practice.
 
 ## Floating-point differences

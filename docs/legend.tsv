@@ -1,6 +1,7 @@
 term	category	expansion	description	source
 ament	tool	ROS2 build system	Build system used on the origin/ROS2 branch (with colcon)	
 angle correction	format	per-channel angle calibration file	Hesai CSV (Channel,Elevation,Azimuth) per unit, ending in a SHA-256 line; supplies each channel's elevation and azimuth offset	
+big.LITTLE	computing		CPU with fast and slow cores (Apple M4: 4+6; RK3588: 4×A76 + 4×A55). lio --threads set to the fast-core count uses far less CPU for nearly the same speed	crates/lio/src/main.rs
 boxplus	method	manifold plus operator	Applies a tangent-space increment to a manifold state; boxminus is the inverse difference	
 catkin	tool	ROS1 build system	Build system used by FAST_LIO main branch; ROS2 replaced it with ament/colcon	
 CustomMsg	format	livox_ros_driver/CustomMsg	Livox per-point packet message (offset_time, line, tag); parsed by Preprocess::avia_handler for Avia/Horizon/Mid-360	
@@ -25,6 +26,7 @@ PTC	standard	Hesai TCP control protocol	Hesai's TCP command channel (SDK default
 rayon	tool		Rust data-parallelism crate; runs lio-core's correspondence search on all cores, RAYON_NUM_THREADS sets the count	crates/lio-core/src/lio.rs
 REP-103	standard	ROS Enhancement Proposal 103	ROS axis convention (X forward, Y left, Z up); Hesai's frame is Y forward, X right	
 REP-145	standard	ROS Enhancement Proposal 145	Requires sensor_msgs/Imu in m/s^2 and rad/s; Hesai's ROS driver publishes g and deg/s	
+Rodrigues' formula	method		Rotation of a vector by angle θ about unit axis k: w + sin θ (k×w) + (1−cos θ) k×(k×w); FAST-LIO's Exp builds the same rotation as a matrix. The rays apply it per point	crates/lio-core/src/rays.rs
 S2	domain	2-sphere manifold	Unit-sphere state type with 2 DOF; FAST-LIO stores gravity as S2 so its magnitude stays fixed at 9.81	
 SDK	tool	software development kit	Here Hesai LiDAR SDK 2.0, the reference the jt128 decoder is checked against	fixtures/README.md
 SIMD	computing	single instruction, multiple data	Vector instructions (NEON on ARM, SSE/AVX on x86); Eigen's SIMD reductions fix the summation order the plane fit reproduces	DEVIATIONS.md

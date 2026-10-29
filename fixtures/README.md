@@ -53,26 +53,30 @@ cargo run --release -p lio --example run_input -- data/input.bin data/rust_frame
   extrinsic_R=-1,0,0,0,-1,0,0,0,1 filter_size_surf=0.25 filter_size_map=0.25
 ```
 
-Results on `room-2.pcap` (1,037 frames over 103.9 s, JT128 settings), both in one linux/arm64 container on an Apple M4 (10 CPUs). Each figure is the median of three interleaved runs of the mapping loop alone:
+Results on `room-2.pcap` (1,037 frames over 103.9 s, JT128 settings), both in one linux/arm64 container on an Apple M4 (4 fast and 6 slow cores) with the machine otherwise quiet. Each figure is the median of three interleaved runs of the mapping loop alone; runs agreed within 3%:
 
-| Build | Threads | Seconds | × real time |
+| Build | 1 thread | 4 threads | 10 threads |
 |---|---|---|---|
-| FAST-LIO with its own CMake flags (`-O3 -g`, asserts on). On ARM its CMake leaves OpenMP off | 1 | 12.6 | 8.2 |
-| The same, OpenMP on, at the 3 threads its CMake picks on large x86 machines | 3 | 10.0 | 10.4 |
-| FAST-LIO at `-O3 -DNDEBUG` with OpenMP | 1 / 2 / 4 / 10 | 11.8 / 9.4 / 8.4 / 9.7 | 8.8 / 11.1 / 12.4 / 10.8 |
-| This port | 1 / 2 / 4 / 10 | 6.5 / 5.0 / 4.6 / 6.9 | 16.0 / 20.8 / 22.8 / 15.0 |
+| FAST-LIO with its own CMake flags (`-O3 -g`, asserts on). On ARM its CMake leaves OpenMP off | 10.2 s | | |
+| The same with OpenMP on, at the 3 threads its CMake picks on large x86 machines | | 6.8 s (3 threads) | |
+| FAST-LIO at `-O3 -DNDEBUG` with OpenMP | 9.2 s | 6.2 s | 6.4 s |
+| This port | 5.1 s | 2.6 s | 4.4 s |
 
-The C++ builds here keep GCC's default fused multiply-adds. Ten threads are slower than four for both: the matching loop is too short per frame to pay for waking them.
+The port's mapping loop is 2.3× faster than FAST-LIO at its best and 3.9× faster than FAST-LIO as built for ARM. The C++ builds here keep GCC's default fused multiply-adds. Ten threads are slower than four for both: FAST-LIO's parallel loops are short, and the slow cores hold them up.
 
-Where the time goes, single-threaded, in seconds for the whole capture:
+The whole `lio replay`, which adds decoding and every one of the 114.6 M rays on its own threads, takes 3.4 s with `--threads 4` and 3.3 s with 6 (31× real time) in the same container. Natively on the M4 it takes 2.6–2.7 s with 6 (39× real time).
 
-| Stage | C++ | Rust |
-|---|---|---|
-| Undistortion (`UndistortPcl`) | 4.8 | 1.9 |
-| Matching (`h_share_model`) | 5.6 | 3.2 |
-| Downsampling (PCL `VoxelGrid`) | 0.8 | 0.5 |
-| Rest of the iterated update | 0.2 | 0.4 |
-| `map_incremental` | 0.1 | 0.1 |
+Where the mapping loop's time goes, in seconds for the whole capture (one run each):
+
+| Stage | C++, 1 thread | Port, 1 thread | C++, 4 threads | Port, 4 threads |
+|---|---|---|---|---|
+| Undistortion (`UndistortPcl`) | 4.1 | 1.7 | 4.1 | 1.0 |
+| Matching (`h_share_model`) | 4.3 | 2.5 | 1.2 | 0.9 |
+| Downsampling (PCL `VoxelGrid`) | 0.5 | 0.3 | 0.5 | 0.3 |
+| Rest of the iterated update | 0.2 | 0.3 | 0.2 | 0.3 |
+| `map_incremental` | 0.1 | 0.1 | 0.1 | 0.1 |
+
+Undistortion is serial in FAST-LIO; the port compensates the points in parallel (DEVIATIONS.md).
 
 ## Hesai SDK reference
 
