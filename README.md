@@ -2,7 +2,7 @@
 
 A ROS-free Rust implementation of [FAST-LIO](https://github.com/hku-mars/FAST_LIO) (FAST-LIO2) LiDAR-inertial odometry. It targets the Hesai JT128 and reads the sensor's UDP packets directly.
 
-> **Status:** M0 (skeleton) and M3 (filter math: manifolds, process model, predict, IMU initialisation) are done and pass golden tests against FAST-LIO's C++. Nothing runs end to end yet. See [docs/plan.md](docs/plan.md).
+> **Status:** M0 (skeleton), M3 (filter math: manifolds, process model, predict, IMU initialisation) and M4 (map: plane fit, voxel downsample, ikd-Tree) are done and pass golden tests against FAST-LIO's C++. Nothing runs end to end yet. See [docs/plan.md](docs/plan.md).
 
 ## What this is
 

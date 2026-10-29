@@ -320,6 +320,8 @@ void imu_init_case() {
 }  // namespace
 
 int main() {
+  std::FILE *json_stream = json::take_stdout();
+  out.reset(json_stream);
   out.begin_object();
   out.key("source"); out.str("hku-mars/FAST_LIO@7cc4175");
   cos_sinc_cases();
@@ -330,6 +332,7 @@ int main() {
   predict_case();
   imu_init_case();
   out.end_object();
-  std::printf("\n");
+  std::fputc('\n', json_stream);
+  std::fclose(json_stream);
   return 0;
 }

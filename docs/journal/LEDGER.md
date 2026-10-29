@@ -90,3 +90,23 @@ Continuation of the 23:27 entry above.
   - Against a double-precision solution, the C++ float result is off by 2.6e-4 and the Rust one by 3.8e-4 (case 19: true d 0.872159, C++ 0.871897, Rust 0.871777). The spread is float32 conditioning inherent to FAST-LIO, not a bug.
   - The test allows 3e-4 per case and requires the median below 5e-6.
 - **test** — Regenerating `m3.json` gave a byte-identical file to the committed one.
+
+### 23:43 · M4 complete: ikd-Tree matches FAST-LIO exactly
+`session 70807f77` · `main` @ `0d2d8d1` · [transcript](transcripts/2026-10-28--70807f77.jsonl)
+
+Continuation of the 23:33 entry above.
+
+- **claim** — Everything FAST-LIO can observe from ikd-Tree depends only on which points are live: downsampled-insert outcomes, box-delete counts, k-NN results. Tree shape, `nth_element` pivots and background-rebuild timing do not change it (ties aside). Pending lazy-deletion labels only exist inside subtrees already marked fully deleted, which `Search` never enters, so the k-NN search can be `&self` and run in parallel.
+  - evidence: `ikd_Tree.cpp` `Push_Down`/`Update`/`Delete_by_range`/`Search`, read in full
+- **decision** — `ikd_tree.rs` uses an index-based arena and rebuilds large subtrees in place rather than on a background thread. Unused operations are left out: `Delete_by_point`, `Add_by_range`, `Radius_Search`, `acquire_removed_points`. Both differences are listed in `DEVIATIONS.md` under "do not change results".
+- **test** — First ikd run: the counts matched, but one k-NN distance differed by 1 ulp (3.8200521 vs 3.820052). The cause is GCC's default `-ffp-contract=fast` fusing `a*b+c` into FMA on aarch64; Rust never fuses.
+  - **decision** — Fixtures now build with `-ffp-contract=off`. The reference then uses plain IEEE arithmetic and gives the same bits on every architecture.
+  - All golden files were regenerated. The plane-fit median error dropped from 1.5e-6 to exactly 0; the worst ill-conditioned case is 5.3e-5.
+- **test** — The ikd-Tree golden test passes exactly: the build, then 5 rounds of 800 downsampled inserts, 110 plain inserts, 2 box deletes and 40 k-NN queries.
+  - Every insert count, delete count and live count matches.
+  - All 200 k-NN results match bit for bit, points and squared distances.
+  - The final map matches: 1566 points.
+- **test** — Mutation checks on throwaway copies:
+  - Skipping "keep the point nearest the voxel centre" fails: 800 inserts against 728.
+  - An inclusive upper bound in the box test at first went **undetected**, because random data never lands on a face. Points snapped to the voxel grid and placed on delete-box faces were added; the mutation now fails (10 deleted against 9).
+- **test** — The generators had been corrupting their JSON: ikd-Tree's thread `printf`s landed in stdout, at varying positions. Fixed with `json::take_stdout()`, which points stdout at stderr and writes JSON to a dup of the original. Two consecutive runs now give the same hashes (`m3` 61e07f42…, `m4` 80648dd8…).

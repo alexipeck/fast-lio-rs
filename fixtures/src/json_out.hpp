@@ -3,12 +3,14 @@
 #pragma once
 
 #include <cstdio>
+#include <unistd.h>
 
 namespace json {
 
 class Writer {
  public:
   explicit Writer(std::FILE *out) : out_(out) {}
+  void reset(std::FILE *out) { out_ = out; }
 
   void begin_object() { sep(); std::fputc('{', out_); first_ = true; }
   void end_object() { std::fputc('}', out_); first_ = false; }
@@ -44,5 +46,15 @@ class Writer {
   std::FILE *out_;
   bool first_ = true;
 };
+
+// Returns a stream on the original stdout and points stdout at stderr, so
+// stray printf output from FAST-LIO code (ikd-Tree's thread messages) cannot
+// end up inside the JSON.
+inline std::FILE *take_stdout() {
+  std::fflush(stdout);
+  std::FILE *json = fdopen(dup(STDOUT_FILENO), "w");
+  dup2(STDERR_FILENO, STDOUT_FILENO);
+  return json;
+}
 
 }  // namespace json

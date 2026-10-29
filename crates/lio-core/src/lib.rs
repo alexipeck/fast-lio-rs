@@ -6,6 +6,7 @@
 //! sensor or I/O code.
 
 pub mod esekf;
+pub mod ikd_tree;
 pub mod imu_init;
 pub mod mat;
 pub mod plane;

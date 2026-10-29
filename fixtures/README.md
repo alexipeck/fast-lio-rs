@@ -30,4 +30,6 @@ Generation is deterministic: a fixed seed, and the inputs are written next to th
 | File | Generator | Covers |
 |---|---|---|
 | `golden/m3.json` | `src/gen_m3.cpp` | MTK exp/log/A-matrix, S2 operations, state boxplus/boxminus/oplus, process model and Jacobians, 40 predict steps, IMU initialisation via `ImuProcess::Process` |
-| `golden/m4.json` | `src/gen_m4.cpp` | `esti_plane` (float, 62 neighbourhoods incl. rank-deficient), PCL `VoxelGrid` (4 clouds incl. the index-overflow passthrough) |
+| `golden/m4.json` | `src/gen_m4.cpp` | `esti_plane` (float, 62 neighbourhoods incl. rank-deficient), PCL `VoxelGrid` (4 clouds incl. the index-overflow passthrough), ikd-Tree: build plus 5 rounds of downsampled insert, plain insert, box delete and 40 k-NN queries, with points placed exactly on voxel and box faces |
+
+The image builds with `-ffp-contract=off`, so the reference uses plain IEEE arithmetic (no fused multiply-add) and gives the same bits on every architecture.

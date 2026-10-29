@@ -5,6 +5,11 @@ project(fast_lio_fixtures CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# GCC fuses a*b+c into FMA on aarch64 by default (-ffp-contract=fast), which
+# shifts results by an ulp depending on the CPU. Rust never fuses, so the
+# reference is built with strict IEEE arithmetic: same on every architecture.
+add_compile_options(-ffp-contract=off)
+
 set(FAST_LIO_DIR "" CACHE PATH "Checkout of hku-mars/FAST_LIO at the pinned commit")
 if(NOT EXISTS "${FAST_LIO_DIR}/include/use-ikfom.hpp")
   message(FATAL_ERROR "FAST_LIO_DIR must point at a FAST_LIO checkout")
