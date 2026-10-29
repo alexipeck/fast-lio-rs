@@ -3,3 +3,4 @@
 /data/
 *.pcap
 *.pcapng
+.DS_Store
