@@ -160,3 +160,32 @@ This continues the conversation logged above under `session 70807f77` (00:28 ent
   - The SDK never fetches firetimes for the JT128 (only for ATX and QT128); it always loads a file. The SDK ships `JT128_Firetime Correction File.csv`.
   - The user does not need to produce either file.
 - **decision** — The capture was moved to `data/room-2.pcap` (git-ignored), with the user's permission.
+
+### 01:17 · Target changes to Point-LIO; per-point ray output; throughput measured
+`session 2a591fe4` · `main` @ `c8b9c1c` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 00:40 entry above.
+
+- **decision** — The user wants a full Rust port of Point-LIO, not FAST-LIO: "You found Point-LIO, this is actually what I want ... I will realistically want to do a full Rust port of that."
+  - It will be a feeder stage for their processing pipeline.
+  - The main output is, for each point, the IMU-corrected sensor position and rotation at that point's time plus the range.
+  - A 10 Hz angular depth map, which needs a pose per frame, may also be needed.
+  - Points should flow downstream before a sweep finishes; for most uses there's no reason to wait for the full pass.
+  - The built-in 200 Hz IMU will be used for now, and the 12,794 Hz IMU later once it's in a rig with known offsets.
+  - Clock sync "won't be a problem". The angle file comes from the sensor tomorrow.
+- **note** — Point-LIO at `4b86a46` (2026-06-13):
+  - **Licence:** the top-level LICENSE is LOAM's BSD-3 text and `package.xml` says BSD; the bundled `include/IKFoM/LICENSE` is GPL-2.0. iVox (`include/ivox`, from Faster-LIO) carries no licence header, and Faster-LIO's own licence was not checked. All of this is compatible with this repo's GPL-2.0.
+  - **Map:** iVox, not ikd-Tree.
+  - **State:** the output model is 30-DOF (pos, rot, offset_R, offset_T, vel, omg, acc, gravity as a plain vect3, bg, ba).
+  - **Per-scan pipeline (`laserMapping.cpp:481-735`):** voxel downsample (`filter_size_surf`), sort by time, group equal timestamps, then a sequential loop. IMU readings are applied as measurement updates at the IMU rate; the state is predicted to each point-time group, followed by a point update.
+  - **Options:** native `cut_frame` sub-frames, `publish_odometry_without_downsample`, and saturation handling (`satu_acc`, `satu_gyro`).
+- **test** — Points surviving Point-LIO's filters on `room-2.pcap` (frames 100–109, sample angle file, 0.5 m blind):
+  - 113,582 raw returns per frame become about 400 at the 0.5 m voxel (≈4,000 updates/s), about 1,000 at 0.3 m and about 2,000 at 0.2 m (≈20,000/s).
+  - `point_filter_num` 1–4 barely changes this.
+  - This matches the README's "4k-8kHz" odometry claim.
+- **test** — Per-update cost on the M4 with `lio-core` parts: 5-NN on a 100k-point ikd-Tree map 1.12 µs, `esti_plane` 0.17 µs, predict 3.7 µs.
+- **claim** — Point-LIO cannot update at the JT128's raw 1.15 M points/s.
+  - Each update depends on the previous one, so the chain is sequential and extra cores don't help.
+  - At roughly 2–3 µs per update on the M4, raw rate needs about 3.5 s of compute per second, and more on an ARM board.
+  - Per-point poses for every raw point are still feasible by propagating the latest state to each point's time. That is cheap and parallel, and an output addition rather than a change to the estimator.
+- **claim** — Of the FAST-LIO work, the SO3 and matrix code, voxel downsample, decoder and fixtures approach carry over. FAST-LIO's S2 gravity, predict/update and ikd-Tree do not, because Point-LIO uses vect3 gravity, its own estimator and iVox. Point-LIO's `esti_plane` still needs diffing against FAST-LIO's.
