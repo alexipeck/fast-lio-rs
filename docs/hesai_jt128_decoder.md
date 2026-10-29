@@ -155,7 +155,8 @@ Source: `udp1_4_parser.h`, `ComputeXYZI`, constants `OTHER_BLOCK_NS_OFFSET{1,2}`
 
 - The last block fired 1.888 ms before the packet timestamp. Each earlier block steps back a further 111 µs, which matches one 0.4° azimuth step at 10 Hz (900 steps in 100 ms).
 - The SDK applies both terms **only when a firetimes file is loaded**. Without one, every point gets the packet time, and that shifts the whole cloud about 1.9 ms relative to the IMU. Keep the block term even without the file.
-- **[verify]** The SDK hard-codes 111 µs whatever the motor speed. Check it at 20 Hz.
+- **Measured at 10 Hz** (`room-2.pcap`): one packet every 222.92 µs, so 111.46 µs per block, against the SDK's 111 µs.
+- **[verify] at 20 Hz:** the SDK hard-codes 111 µs whatever the motor speed.
 
 ### 4.3 What FAST-LIO expects
 
@@ -207,18 +208,23 @@ It sits in the trailer when status `0x02` is set: 22 bytes, right after the tail
 | +0 | i16 | temperature | ÷100 → °C |
 | +2 | u16 | accel scale | — |
 | +4 | u16 | gyro scale | — |
-| +6 | u32 | IMU timestamp counter | SDK multiplies by 25, then never uses it |
+| +6 | u32 | IMU timestamp counter | SDK multiplies by 25, then never uses it. **Always 0** on the unit captured |
 | +10 | i16 ×3 | accel x, y, z | `raw * accel_scale / 1e6` |
 | +16 | i16 ×3 | gyro x, y, z | `raw * gyro_scale / 1e5` |
 
-### Units [inferred, high confidence]
+### Units [confirmed on `room-2.pcap`]
 
 The SDK never names units. Two pieces of evidence:
 
 - The ROS driver copies the raw values straight into `sensor_msgs/Imu`, next to commented-out helpers named `From_g_To_ms2` and `From_degs_To_rads` (`src/manager/source_driver_ros2.hpp:422-430`).
-- The scales fit a 16-bit ±2 g / ±250 °/s IMU (61 µg and 7.63 m°/s per LSB).
+- On the captured unit the scale fields read 122 and 3049. That is 1.22e-4 g and 0.03049 °/s per LSB, matching a 16-bit IMU set to ±4 g and ±1000 °/s.
 
 So the values are **accel in g** and **gyro in deg/s**. The Hesai ROS driver therefore breaks REP-145.
+
+The capture confirms this:
+- Over the first 6.8 s, which are stationary, |accel| is 0.993.
+- Gyro noise is 0.1–0.5 per axis. That is plausible in °/s and impossible in rad/s.
+- The handheld peak is 167, inside the ±1000 °/s range.
 
 **For FAST-LIO:**
 - **Gyro must be converted to rad/s.** Otherwise rotation comes out 57× too large.
@@ -231,12 +237,19 @@ The SDK stamps each IMU sample with the time of the packet that carries it. Its 
 1. **Timing jitter.** The timestamp is off by however long the sample sat before a packet carried it.
 2. **Lost samples.** Real consecutive samples with identical values get dropped. That happens most while the sensor is stationary, which is exactly when FAST-LIO estimates gravity and gyro bias.
 
-**For Rust:**
-- Remove duplicates by the **IMU counter**, not by value.
-- Find out what one counter tick means by fitting the counter against `t_pkt`. **[verify]**
-- Map the counter onto sensor time.
+**The counter can't help on this unit:** it was 0 in all 466,361 packets. Measured instead:
+- **Rate:** the six values change every 4.91 ms (median), so the IMU runs at 200 Hz. Each sample repeats in 22 or 23 consecutive packets.
+- **Jitter:** the 1st–99th percentile interval between changes is 4.89–5.15 ms. That spread is the timing error from stamping by packet.
+- **Merged samples:** 11 of 20,784 changes came after about twice the nominal gap (44–45 packets, ~10 ms). Those are identical consecutive samples, which the SDK's value comparison merges into one.
 
-### Axes [verify]
+**For Rust:**
+- Detect samples by a change in any of the six raw values.
+- Stamp each sample with the packet time of the first packet that carries it.
+- Split a run of identical values lasting about k × the nominal 22.4 packets into k samples spaced 5 ms apart. That recovers what the SDK drops.
+
+### Axes [partly measured]
+
+At rest the accelerometer reads (+0.024, −0.004, +0.992) g, so the IMU's +z points up, like the LiDAR's. Whether the IMU's x and y match the LiDAR's x and y is still open.
 
 Nothing in the SDK relates the IMU's axes to the LiDAR's. The LiDAR transform parameter only moves points. Get the relationship from the JT128 manual, or measure it: compare gravity's direction at rest with the ground-plane normal. The result goes into FAST-LIO's `extrinsic_R` / `extrinsic_T`.
 
@@ -268,6 +281,31 @@ These are per-unit files. The copies in the SDK's `correction/` folder are only 
 4. The IMU counter tick, from a counter-vs-`t_pkt` fit, and how many packets repeat each sample. Together these give the IMU rate.
 5. Whether +Y points to the sensor's marked front.
 6. The 20 Hz block spacing (§4.2).
+
+Items 1–4 are answered in §11 from `room-2.pcap`. Items 5 and 6, and the IMU's x/y axes, are still open.
+
+## 11. Measured on `room-2.pcap`
+
+A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
+
+| Item | Value |
+|---|---|
+| Packets | 466,361 UDP datagrams of 1100 bytes, sensor 192.168.50.201:2368 to host :2368, none other |
+| Header | v1.4, status-info version 137 (JT128), `L` = 128, `B` = 2, distance unit 4 mm, echo count 0, echo num 1 |
+| Flags | `0x23`: sequence number, IMU, weight-factor byte. So the channel unit is 4 bytes |
+| Return / mode | `0x37` strongest (single return); operational mode 0 |
+| Motor speed | 5985–5993 raw, i.e. 598.5–599.3 RPM at 0.1 RPM per unit |
+| Sequence | 0 gaps, 0 lost |
+| Frames | 450 packets and 115,200 point slots per frame, one every 100.32 ms (9.97 Hz); 1038 frames |
+| Block step | 0.40° (0.39° twice, encoder jitter) |
+| Points | 4.0% no return. Range median 1.81 m, 5th percentile 0.64 m, minimum 0.096 m (the sensor's own surroundings), maximum 62.8 m |
+| Clock | Calendar-form UTC. Sensor time runs 0.367 s behind the capture host, so the sensor is not synced to the host |
+| IMU temperature | 34.9 °C rising to 37.2 °C over 104 s |
+
+**Decoder rules that follow:**
+- **Spin-up packets.** Drop packets whose two block azimuths don't advance by about 0.4°. The first 66 packets after wake (~15 ms) report azimuth 0 for both blocks while the motor spins up.
+- **IMU.** De-duplicate and stamp as described in §7.
+- **Blind distance.** Set it to about 0.5 m, so returns from the mount and the operator are dropped.
 
 ## Interface to the algorithm crate
 

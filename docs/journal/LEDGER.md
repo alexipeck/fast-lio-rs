@@ -110,3 +110,31 @@ Continuation of the 23:33 entry above.
   - Skipping "keep the point nearest the voxel centre" fails: 800 inserts against 728.
   - An inclusive upper bound in the box test at first went **undetected**, because random data never lands on a face. Points snapped to the voxel grid and placed on delete-box faces were added; the mutation now fails (10 deleted against 9).
 - **test** — The generators had been corrupting their JSON: ikd-Tree's thread `printf`s landed in stdout, at varying positions. Fixed with `json::take_stdout()`, which points stdout at stderr and writes JSON to a dup of the original. Two consecutive runs now give the same hashes (`m3` 61e07f42…, `m4` 80648dd8…).
+
+## 2026-10-29
+
+### 00:28 · First real JT128 capture analysed; FAST-LIO's odometry output pinned down
+`session 70807f77` · `main` @ `fce2920` · [transcript](transcripts/2026-10-28--70807f77.jsonl)
+
+Continuation of the 23:43 entry above.
+
+- **note** — The user supplied `room-2.pcap`, a real capture: 540 MB, 104 s, placed in the repo root and git-ignored. They asked exactly what form FAST-LIO's odometry takes; where it should go is still TBD.
+- **test** — Read-only analysis with a stdlib Python inspector, kept in the scratchpad.
+  - 466,361 packets of 1100 bytes; v1.4; status-info version 137 (JT128); `L` = 128, `B` = 2; distance unit 4 mm.
+  - Flags `0x23`: sequence number, IMU and weight-factor byte.
+  - Return `0x37` (strongest); motor ~599 RPM; 0 sequence gaps.
+  - 450 packets per frame at 9.97 Hz; 222.92 µs per packet.
+  - Sensor clock 0.367 s behind the host.
+  - Details are in `docs/hesai_jt128_decoder.md` §11.
+- **verdict → I was right** — The 22:22 claim that the IMU reports g and deg/s is confirmed. The scale fields read 122 and 3049 (±4 g, ±1000 °/s). At rest |acc| = 0.993, gyro noise is 0.1–0.5 per axis (only plausible in °/s), and the handheld peak is 167.
+- **verdict → I was wrong** — The spec told the Rust decoder to de-duplicate IMU samples by the u32 IMU counter. On this unit the counter is 0 in every packet. Samples have to be told apart by a change of value, as the SDK does.
+  - Measured: 200 Hz, 22–23 packets per sample, interval jitter 4.89–5.15 ms (1st–99th percentile).
+  - 11 of 20,784 changes came after a doubled gap, which are identical consecutive samples. The new rule splits such runs back into samples 5 ms apart.
+- **test** — The first 66 packets (~15 ms) report azimuth 0 for both blocks while the motor spins up from standby. The decoder will drop packets whose block azimuths don't advance.
+- **test** — At rest the IMU's +z points up, like the LiDAR's. The IMU-to-LiDAR x/y relationship and whether +Y points to the marked front are still open.
+- **claim** — FAST-LIO's odometry output carries two quirks that sit in the output layer, not the algorithm (`laserMapping.cpp:589-606`):
+  - The published `pose.covariance` has its position and rotation blocks swapped relative to ROS's (x, y, z, rx, ry, rz) order. The `k = i<3 ? i+3 : i-3` remap suits the old rotation-first `StatesGroup`, not the position-first IKFoM state.
+  - The message is published *before* its covariance is filled in, so each one carries the previous frame's covariance; the first carries zeros.
+  - Twist is never set.
+
+  The plan is to emit a correct covariance and the velocity in the Rust output.
