@@ -267,3 +267,48 @@ Continuation of the 02:47 entry above.
 - **test** — M5 golden tests (`ef6fea7`): undistorted points bit-identical, state and P within 8e-16. The 200-measurement update matches to 1.9e-10 and the 10-measurement update to 3e-14. Regenerating `m3` and `m4` from the rebuilt image gave byte-identical files.
 - **test** — The render of the ray output (every 20th ray turned back into points) shows a coherent room with the path inside it, but doubled walls. That is slow drift in this data. Hesai's *sample* angle file was used, because the unit's own file only arrives tomorrow.
 - **note** — The disk is 96% full (19 GB free). The recorded inputs (0.2–0.6 GB each) were deleted after use.
+
+### 03:23 · SDK match, bit-exact plane fits, JT128 defaults
+`session 2a591fe4` · `main` @ `a8742de` · [transcript](transcripts/2026-10-29--2a591fe4.jsonl)
+
+Continuation of the 02:52 entry above.
+
+- **test** — Decoder against Hesai SDK 2.0 (`fixtures/hesai`, built on the local image), SDK frames 100–101:
+  - 227,318 points. Coordinates are bit-identical. Times are within 4 ns, the resolution of `dt_ms`.
+  - All 20,784 of the SDK's IMU samples match ours by value. It stamps 48 of them one packet (about 222 µs) later than we do. One is the capture's first sample, because the SDK spends that packet detecting the lidar type. The rest are samples whose value first arrives in a frame's first packet. We keep the earlier time.
+  - The test is `crates/jt128/tests/sdk_reference.rs`, ignored by default because the data stays local. M2 is done.
+- **test** — The linux/arm64 build (Docker on the M4) replays the whole capture at 9.1× real time. Its path is within 1 mm of the macOS build's through frame 478. After that it drifts up to 17 cm away: the platforms' `libm` differ, and chaos amplifies it.
+- **test** — Settings sweep: 180° extrinsic, `blind` 1.0, the same every-20th ray for every run.
+  - **Sharpness** is the number of occupied 5 cm cells. The Mid-360 voxels (0.5 m) give 190,148 cells and a 13.5 m path. 0.25 m voxels give 97,251 cells and a 9.8 m path, at 11.3× real time.
+  - **Other variants** barely move it:
+    - 0.25 m with `point_filter_num` 2: 97,223.
+    - 0.2 m with `point_filter_num` 1: 95,351, at 5.4× real time.
+    - 0.3 m: 107,250.
+    - Four iterations: 97,345.
+    - `blind` 0.5: 96,992, and stable.
+  - **End points:** the 0.25 m variants end within 1 cm of each other, at about (−0.20, −0.11, 0.54). The 0.5 m run ends 40 cm away.
+- **decision** — `lio` now defaults to the JT128's settings: 180° extrinsic, `blind` 1.0 and 0.25 m voxels. `lio-core` and the C++ harness keep FAST-LIO's Mid-360 defaults.
+- **verdict → I was wrong** — At 02:52 I put the doubled walls down to slow drift in this data, perhaps made worse by the sample angle file. They came from the 0.5 m voxels: at 0.25 m the walls render single with the same angle file.
+- **test** — At 0.25 m, Rust and C++ first differed at frame 3, with 463 matched planes against 462. Per-point debug output from both `h_share_model`s showed:
+  - **State:** identical to 1e-16.
+  - **Downsampled points:** 889 of 989 differed by a few f32 ULPs. PCL 1.12's `VoxelGrid` sorts with Boost's spreadsort, which is unstable; ours is stable.
+  - **With a stable sort in PCL** (one-line experiment, not committed): body points, world points and k-nearest distances became bit-identical. Plane coefficients still differed in about a third of fits, by 1 to 16k ULPs.
+- **verdict → I was wrong** — DEVIATIONS.md said plane fits matched bit for bit. On real data they didn't.
+  - Eigen's SIMD reductions add four terms as `(x0+x2)+(x1+x3)`, then the rest in order. The port added left to right.
+  - Fixed with `eigen_sum` in `plane.rs`. Plane coefficients, residuals, world points and distances are now bit-identical to the default SIMD C++ build.
+  - The m4 plane golden test is now exact; it had a 3e-4 tolerance.
+- **test** — A second port-side difference, fixed: FAST-LIO stores the match score in a `float` before comparing it with 0.9, but the port compared the double.
+- **test** — Full capture, both implementations on the same recorded input:
+  - **JT128 settings, against the stable-sort C++:** identical point counts through frame 148, at most 6.9 mm apart.
+  - **Mid-360 settings, same comparison:** identical through frame 480.
+  - **C++ against itself:** the C++ as shipped against the stable-sort C++ differs from frame 6 (JT128) or frame 477 (Mid-360). It drifts to 12 mm and 102 mm, the same spread as port against C++.
+  - **What remains:** the voxel tie order, and Eigen's NEON fused multiply-adds in double products (about 1e-16). The table is in DEVIATIONS.md.
+- **decision** — PCL's spreadsort, libstdc++'s sort and Eigen's FMA kernels are not replicated:
+  - the tie order is unspecified even in C++ and is no part of FAST-LIO's algorithm;
+  - libstdc++ is GPL-3 code;
+  - FAST-LIO differs from itself by as much.
+- **test** — Replay determinism (`crates/lio/tests/replay.rs`): 150 frames and 14.8 M rays hash identically across two runs, and between 1 thread and many.
+- **test** — The repo `Dockerfile` (debian:bookworm-slim, with rustup installing the pinned 1.99.0) was only checked with its base image swapped for the local fixtures image, because the registry is still unreachable.
+  - It builds, and its image replays at 9.3× real time.
+  - The build context excludes `data/` (190 kB).
+- **note** — 12 GB of disk free. The large ray files and recorded inputs were deleted after use.

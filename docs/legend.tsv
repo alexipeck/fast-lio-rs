@@ -5,17 +5,28 @@ boxplus	method	manifold plus operator	Applies a tangent-space increment to a man
 catkin	tool	ROS1 build system	Build system used by FAST_LIO main branch; ROS2 replaced it with ament/colcon	
 CustomMsg	format	livox_ros_driver/CustomMsg	Livox per-point packet message (offset_time, line, tag); parsed by Preprocess::avia_handler for Avia/Horizon/Mid-360	
 extrinsic	domain	LiDAR-to-IMU rigid transform	offset_R_L_I / offset_T_L_I in the state; seeded from mapping/extrinsic_R,T and optionally refined online when extrinsic_est_en is true	
+FAST-LIO	tool	Fast LiDAR-Inertial Odometry	hku-mars LiDAR-inertial odometry (FAST-LIO2 in its current form); the algorithm this repo implements, pinned at commit 7cc4175	README.md
 firetimes	format	per-channel firing-delay file	Hesai CSV (channel,firetime/us) giving each laser's firing offset; adds to per-point time and to azimuth correction	
+FMA	computing	fused multiply-add	a*b+c with one rounding; fixtures build with -ffp-contract=off so the compiler adds none, Rust never emits them	DEVIATIONS.md
 IESKF	method	Iterated Error-State Kalman Filter	FAST-LIO's estimator: IMU-driven prediction, then repeated point-to-plane updates until the state increment converges (esekfom.hpp update_iterated_dyn_share_modified)	
 ikd-Tree	tool	incremental k-d tree	Git submodule (include/ikd-Tree) holding the local map; supports point insert with voxel downsample, box delete, kNN search, and lazy rebuild on a background pthread	
 IKFoM	tool	Iterated Kalman Filters on Manifolds	Header-only C++ toolkit in include/IKFoM_toolkit that implements the IESKF generically over manifold-valued states	
+IMU	domain	inertial measurement unit	Accelerometer and gyroscope; the JT128's built-in one reports at 200 Hz inside the LiDAR packets, in g and deg/s	docs/hesai_jt128_decoder.md
 iVox	method	incremental voxel map	Hash-of-voxels map from Faster-LIO; an alternative to ikd-Tree, not used because the Rust port follows FAST-LIO exactly	
 JT128	tool	Hesai JT128 hyper-hemispherical LiDAR	128-channel mini LiDAR (360 x ~187-189 deg, built-in IMU) that the Rust port targets; speaks Hesai UDP protocol v1.4	
 LIO	domain	LiDAR-Inertial Odometry	Pose estimation that fuses LiDAR scans with IMU readings; FAST-LIO is a tightly coupled LIO	
+LIORAYS1	format	ray file magic	First 8 bytes of a lio --rays file; then per frame u32 count, f64 begin, f64 end, u8 kind and 40-byte ray records	crates/lio/src/lib.rs
 MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) that composes vect, SO3 and S2 into one state type with boxplus/boxminus	
+NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
+PCL	tool	Point Cloud Library	C++ library FAST-LIO uses for point types and VoxelGrid downsampling; only the fixtures image uses it	fixtures/README.md
 PTC	standard	Hesai TCP control protocol	Hesai's TCP command channel (SDK default port 9347); 0x05 returns angle calibration, 0xA9 returns firetimes	
 REP-103	standard	ROS Enhancement Proposal 103	ROS axis convention (X forward, Y left, Z up); Hesai's frame is Y forward, X right	
 REP-145	standard	ROS Enhancement Proposal 145	Requires sensor_msgs/Imu in m/s^2 and rad/s; Hesai's ROS driver publishes g and deg/s	
 S2	domain	2-sphere manifold	Unit-sphere state type with 2 DOF; FAST-LIO stores gravity as S2 so its magnitude stays fixed at 9.81	
+SDK	tool	software development kit	Here Hesai LiDAR SDK 2.0, the reference the jt128 decoder is checked against	fixtures/README.md
+SIMD	computing	single instruction, multiple data	Vector instructions (NEON on ARM, SSE/AVX on x86); Eigen's SIMD reductions fix the summation order the plane fit reproduces	DEVIATIONS.md
+spreadsort	method	Boost.Sort spreadsort	Unstable radix-based sort PCL 1.12's VoxelGrid uses; leaves the summation order within a voxel unspecified	DEVIATIONS.md
+TUM	format	TUM RGB-D trajectory format	One pose per line: t x y z qx qy qz qw; the format of lio --path	README.md
 UDP 1.4	standard	Hesai point-cloud UDP protocol v1.4	Packet format shared by Pandar128, OT128 and JT128; byte 4 >= 137 marks JT128	
+ULP	metric	unit in the last place	Spacing between adjacent floating-point values; used to size Rust-vs-C++ differences	DEVIATIONS.md
