@@ -8,7 +8,10 @@
 pub mod esekf;
 pub mod imu_init;
 pub mod mat;
+pub mod plane;
+pub mod point;
 pub mod process;
 pub mod s2;
 pub mod so3;
 pub mod state;
+pub mod voxel;

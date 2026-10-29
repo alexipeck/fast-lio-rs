@@ -5,5 +5,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 docker build -q -t fast-lio-rs-fixtures "$here" >/dev/null
 mkdir -p "$here/golden"
-docker run --rm fast-lio-rs-fixtures /build/gen_m3 > "$here/golden/m3.json"
-echo "wrote $here/golden/m3.json"
+for m in m3 m4; do
+  docker run --rm fast-lio-rs-fixtures "/build/gen_$m" > "$here/golden/$m.json"
+  echo "wrote $here/golden/$m.json"
+done

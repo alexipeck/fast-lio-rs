@@ -64,3 +64,29 @@ Continuation of the 23:12 entry above.
 - **test** — Golden generation is deterministic: two runs of `fixtures/generate.sh` gave the same SHA-1, `212988fc…`.
 - **decision** — The CI fixtures job runs on `ubuntu-24.04-arm` and checks the regenerated golden file byte for byte. The data was generated on arm64, and Eigen's SIMD rounding differs on x86_64.
 - **note** — `THIRD_PARTY_NOTICES.md` gained MTK's Universitaet Bremen BSD notice, because `so3.rs` and `s2.rs` follow MTK's formulas.
+
+### 23:33 · M4, first half: plane fit and voxel downsample
+`session 70807f77` · `main` @ `1b575e8` · [transcript](transcripts/2026-10-28--70807f77.jsonl)
+
+Continuation of the 23:27 entry above.
+
+- **decision** — `plane::esti_plane` reproduces Eigen 3.4's `ColPivHouseholderQR` in `f32`, step for step:
+  - pivot choice, using the first index of the maximum;
+  - the column-norm downdate, with the √ε threshold;
+  - the rank cut-off;
+  - Qᵀb applied H₀ first;
+  - column-oriented back-substitution that skips zero entries.
+
+  The reject test is written as "no point exceeds the threshold", so a NaN plane is accepted, as in the C++.
+- **decision** — `voxel::downsample` reproduces PCL 1.12 `VoxelGrid` as FAST-LIO uses it, in `f32`:
+  - all voxels are kept, and xyz, intensity and curvature are averaged;
+  - indices come from `floor(v·inv) − min_b`, computed in float;
+  - when the leaf is so small that indices would overflow, the input is returned unchanged.
+
+  PCL sorts with Boost spreadsort, which is unstable, so the order points are summed within a voxel is unspecified even in C++. Rust uses a stable sort.
+- **test** — Downsample matches PCL on 4 clouds (3000/3000/2000/500 points). The worst relative error is 0 on three of them and 2.3e-7 on the dense cloud, from summation order. The overflow case passes the input through, as PCL does.
+- **test** — The plane fit makes the same accept/reject decision as FAST-LIO in all 62 cases (51 accepted). The median coefficient error is 1.5e-6 and the worst is 1.2e-4.
+  - The worst cases are ill-conditioned: a patch 34–47 m out on a plane that passes near the origin.
+  - Against a double-precision solution, the C++ float result is off by 2.6e-4 and the Rust one by 3.8e-4 (case 19: true d 0.872159, C++ 0.871897, Rust 0.871777). The spread is float32 conditioning inherent to FAST-LIO, not a bug.
+  - The test allows 3e-4 per case and requires the median below 5e-6.
+- **test** — Regenerating `m3.json` gave a byte-identical file to the committed one.

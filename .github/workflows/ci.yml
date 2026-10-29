@@ -30,5 +30,7 @@ jobs:
       - run: docker run --rm fast-lio-rs-fixtures
       - name: Golden files match the committed ones
         run: |
-          docker run --rm fast-lio-rs-fixtures /build/gen_m3 > "$RUNNER_TEMP/m3.json"
-          cmp "$RUNNER_TEMP/m3.json" fixtures/golden/m3.json
+          for m in m3 m4; do
+            docker run --rm fast-lio-rs-fixtures "/build/gen_$m" > "$RUNNER_TEMP/$m.json"
+            cmp "$RUNNER_TEMP/$m.json" "fixtures/golden/$m.json"
+          done
