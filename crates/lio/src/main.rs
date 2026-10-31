@@ -51,6 +51,11 @@ outputs:
   --map <file.pcd>       final map, ASCII PCD
   --dump-input <file>    record FAST-LIO's exact input for the C++ reference run
 
+decoding:
+  --wake-hold <s>        drop the points of this long after the motor's spin-up
+                         from standby, while the JT128 reads wrong (default 0.5;
+                         0 keeps them)
+
 FAST-LIO settings (defaults: FAST-LIO's Mid-360 configuration, except the
 three JT128 values given here):
   --extrinsic-r <9 comma-separated>  LiDAR-to-IMU rotation, row-major (default
@@ -106,6 +111,7 @@ struct Args {
     max_frames: Option<usize>,
     threads: Option<usize>,
     placement: Placement,
+    decoder: DecoderConfig,
     lio: LioConfig,
 }
 
@@ -191,6 +197,7 @@ fn parse_args() -> Result<Args, String> {
         max_frames: None,
         threads: None,
         placement: Placement::default(),
+        decoder: DecoderConfig::default(),
         lio: lio::jt128_config(),
     };
     if mode == "replay" {
@@ -220,6 +227,7 @@ fn parse_args() -> Result<Args, String> {
             "--map" => a.map = Some(v),
             "--dump-input" => a.dump_input = Some(v),
             "--max-frames" => a.max_frames = Some(num()? as usize),
+            "--wake-hold" => a.decoder.wake_hold = num()?,
             "--threads" => a.threads = Some((num()? as usize).max(1)),
             "--cpus" => a.placement.process = cpu_option(&v)?,
             "--pin" => a.placement.pin(&v)?,
@@ -603,7 +611,7 @@ fn run(a: Args) -> Result<(), String> {
         ),
         None => None,
     };
-    let mut decoder = Decoder::new(&angles, firetimes.as_ref(), DecoderConfig::default());
+    let mut decoder = Decoder::new(&angles, firetimes.as_ref(), a.decoder.clone());
     let mut estimator = Estimator::new(a.lio.clone());
     if let Some(p) = &a.dump_input {
         estimator.dump_input_to(Box::new(BufWriter::new(
@@ -659,8 +667,13 @@ fn run(a: Args) -> Result<(), String> {
     let s: &DecoderStats = &decoder.stats;
     let c = outputs.counts;
     eprintln!(
-        "decoded {} packets ({} spin-up, {} sequence gaps), {} IMU samples ({} recovered)",
-        s.packets, s.spinup_packets, s.sequence_gaps, s.imu_samples, s.imu_samples_split
+        "decoded {} packets ({} spin-up, {} after a wake, {} sequence gaps), {} IMU samples ({} recovered)",
+        s.packets,
+        s.spinup_packets,
+        s.wake_packets,
+        s.sequence_gaps,
+        s.imu_samples,
+        s.imu_samples_split
     );
     eprintln!(
         "frames: {} (first {}, IMU init {}, map init {}, updated {}, skipped {}); rays: {}",

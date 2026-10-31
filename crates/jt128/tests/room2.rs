@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 use jt128::pcap::PcapReader;
-use jt128::{AngleCorrection, Decoder, DecoderConfig, Event, Firetimes};
+use jt128::{AngleCorrection, Decoder, DecoderConfig, DecoderStats, Event, Firetimes};
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
@@ -52,8 +52,10 @@ fn room2_decodes_like_the_inspector_says() {
     assert_eq!(s.packets, 466_361);
     assert_eq!(s.sequence_gaps, 0);
     assert_eq!(s.spinup_packets, 66);
+    // 0.5 s of packets after the spin-up, at about 4,480 a second.
+    assert_eq!(s.wake_packets, 2242);
     assert!(
-        (1036..=1040).contains(&frames.len()),
+        (1030..=1034).contains(&frames.len()),
         "frames: {}",
         frames.len()
     );
@@ -85,4 +87,87 @@ fn room2_decodes_like_the_inspector_says() {
         gmax < 0.05,
         "stationary gyro should be well under 0.05 rad/s, got {gmax}"
     );
+}
+
+/// The capture's first `n` payloads.
+fn first_payloads(n: usize) -> Vec<Vec<u8>> {
+    let mut pcap = PcapReader::new(BufReader::new(
+        File::open(format!("{ROOT}/data/room-2.pcap")).unwrap(),
+    ))
+    .unwrap();
+    let mut out = Vec::with_capacity(n);
+    while out.len() < n {
+        out.push(pcap.next_udp().unwrap().unwrap().payload.to_vec());
+    }
+    out
+}
+
+/// Decodes `payloads` and returns the frames: their longest point time span
+/// (ms) and how many points lie more than 2.3 m above the sensor, where the
+/// ceiling is 1.7 m.
+fn decode_frames(payloads: &[Vec<u8>], cfg: DecoderConfig) -> (DecoderStats, Vec<(f32, usize)>) {
+    let angles = AngleCorrection::parse(
+        &std::fs::read(format!("{ROOT}/data/angle_correction.csv")).unwrap(),
+    )
+    .unwrap();
+    let fire =
+        Firetimes::parse(&std::fs::read(format!("{ROOT}/data/firetimes.csv")).unwrap()).unwrap();
+    let mut dec = Decoder::new(&angles, Some(&fire), cfg);
+    let mut events = Vec::new();
+    for p in payloads {
+        dec.push(p, &mut events).unwrap();
+    }
+    dec.flush(&mut events);
+    let frames = events
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Frame(f) => Some((
+                f.points.iter().map(|p| p.dt_ms).fold(0.0f32, f32::max),
+                f.points.iter().filter(|p| p.z > 2.3).count(),
+            )),
+            Event::Imu(_) => None,
+        })
+        .collect();
+    (dec.stats.clone(), frames)
+}
+
+#[test]
+#[ignore = "needs data/room-2.pcap and the calibration files in data/"]
+fn room2_wake_transient_is_held() {
+    // About 5.8 s, all of it with the sensor still on the desk.
+    let payloads = first_payloads(26_000);
+    let above = |f: &[(f32, usize)]| f.iter().map(|f| f.1).sum::<usize>();
+
+    let kept = DecoderConfig {
+        wake_hold: 0.0,
+        ..DecoderConfig::default()
+    };
+    let (s, frames) = decode_frames(&payloads, kept);
+    eprintln!("no hold: {s:?}; {} points above 2.3 m", above(&frames));
+    assert_eq!(s.wake_packets, 0);
+    assert!(above(&frames[..3]) > 10_000);
+
+    let (s, frames) = decode_frames(&payloads, DecoderConfig::default());
+    eprintln!("held: {s:?}; {} points above 2.3 m", above(&frames));
+    assert_eq!((s.spinup_packets, s.wake_packets), (66, 2242));
+    // 2 stray points over 5 s, against 108,901 without the hold.
+    assert!(above(&frames) < 10);
+
+    // A wake in the middle of a stream: the same start fed again (its packet
+    // times go back, as a stream's would not). The frame in progress ends at
+    // the second spin-up and the second hold drops the transient again.
+    let twice: Vec<_> = payloads[..13_000]
+        .iter()
+        .chain(&payloads[..13_000])
+        .cloned()
+        .collect();
+    let (s, frames) = decode_frames(&twice, DecoderConfig::default());
+    let longest = frames.iter().map(|f| f.0).fold(0.0f32, f32::max);
+    eprintln!(
+        "woken twice: {s:?}; {} points above 2.3 m; longest frame {longest:.1} ms",
+        above(&frames)
+    );
+    assert_eq!((s.spinup_packets, s.wake_packets), (132, 2 * 2242));
+    assert!(above(&frames) < 10);
+    assert!(longest < 101.0, "a frame spans {longest} ms");
 }

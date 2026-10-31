@@ -462,3 +462,15 @@ Follows the 11:36 entry above. The user read the unit's angle file out (`data/jt
     - `crates/lio/examples/embed.rs`;
     - the ray stream is flushed per frame;
     - `--extrinsic-est` prints its estimate.
+
+## 2026-10-30
+
+### 22:22 · The decoder drops the points after a wake
+`session 6f222d9c` (the UAV project's) · `main` @ `b486b6d` · transcript in the UAV project's journal
+
+The UAV session found the wake transient while comparing this port's room-2 map with GLIM's, and held back the stream's first 0.5 s in its own `bench` and `jt128-bag`. The user, asked whether the decoder should drop it too: "Yes, add it".
+
+- **finding** — For 0.227 s after the last spin-up packet, channels 116–127 read 3.72–3.75 m to a ceiling 1.69 m away and reflectivity is 60–90 against 15–35 after; the change comes within one packet and no header, tail or status field marks it. Three wakes measured: `room-2.pcap` (66 spin-up packets), and the unit's wakes of 2026-10-29 (65) and 2026-10-30 (66), each with the change at the same 0.227 s. Two captures that start with the sensor already running have no spin-up and no transient. FAST-LIO built its first map from the transient: 108,901 points more than 2.3 m above the sensor in room-2's first 5.8 s.
+- **change** — `jt128::DecoderConfig::wake_hold` (default 0.5 s, about twice the transient; `lio --wake-hold`, 0 keeps them): the points of packets within that much packet time after the last spin-up packet are dropped and counted in `DecoderStats::wake_packets`; their IMU samples are kept. A spin-up also ends the frame in progress and starts frame splitting over, so a wake in the middle of a stream no longer joins frames across the standby. A clock that steps back ends the hold. `lio`'s summary prints the count. Docs: `hesai_jt128_decoder.md` §11, `DEVIATIONS.md` (four departures from the SDK), `integration.md` (stats, health sample), `fixtures/README.md` (the C++ comparisons predate the hold). Legend: wake transient, spin-up packet. Backups in the UAV session's scratchpad, `backup-fastlio-wake/`. Not committed.
+- **test** — `room2` test: 2,242 packets held, 1,032 frames (1,037 before). New `room2_wake_transient_is_held`: 108,901 points above 2.3 m without the hold, 2 with it; the same start fed twice as a mid-stream wake: 132 spin-up, 4,484 held, no frame longer than 100.3 ms (2,384 ms with the frame reset taken out). `sdk_reference` still bit for bit (it matches frames by time). `replay` bit-identical across runs and thread counts. Workspace tests, clippy and fmt clean.
+- **test** — `lio replay room-2.pcap`: path 9.48 m (9.51 m with `--wake-hold 0`, which reproduces the old summary exactly), map 3,436 points (5,465). Against GLIM's room-2 path: RMS 1.0 cm, orientation 0.31° on its own fit; the still start sinks 2.9 cm in its first 6 s instead of 6.0 cm. The UAV project's 2026-10-30 recordings: stationary-1 (a wake) held 2,241 packets, path within 3 cm of the start for 302 s; moving-2 (no wake) held none and kept its first 0.5 s, 12.0 cm RMS from GLIM's path against 13.0 cm when the UAV's bench dropped that 0.5 s.

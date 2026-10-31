@@ -319,6 +319,7 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 | Points | 4.0% no return. Range median 1.81 m, 5th percentile 0.64 m, minimum 0.096 m (the sensor's own surroundings), maximum 62.8 m |
 | Clock | Calendar-form UTC. Sensor time runs 0.367 s behind the capture host, so the sensor is not synced to the host |
 | IMU temperature | 34.9 °C rising to 37.2 °C over 104 s |
+| After the wake | For 0.227 s after the last spin-up packet, channels 116–127 (near vertical) read 3.72–3.75 m to a ceiling 1.69 m away, reflectivity is 60–90 against 15–35 after, and frames carry about 30% more points. The change comes within one packet. Only the point bytes differ: no header, tail or status field marks it. The same 0.227 s on two later wakes of the unit (2026-10-29 and 2026-10-30); captures that start with the sensor already running have neither the spin-up nor this |
 
 **Found when running FAST-LIO on the capture:**
 - **IMU-to-LiDAR rotation: none.** With the unit's own angle file, the IMU's axes are the LiDAR's, so FAST-LIO's identity `extrinsic_R` applies.
@@ -329,6 +330,7 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 
 **Decoder rules that follow:**
 - **Spin-up packets.** Drop packets whose two block azimuths don't advance by about 0.4°. The first 66 packets after wake (~15 ms) report azimuth 0 for both blocks while the motor spins up.
+- **After the wake.** Drop the points of the 0.5 s of packet time after the last spin-up packet, about twice the 0.227 s measured (`DecoderConfig::wake_hold`, `lio --wake-hold`); the IMU samples are kept. A spin-up also ends the frame in progress and starts frame splitting over, so a wake in the middle of a stream does not join frames across the standby. Without this, FAST-LIO's first map holds a ceiling 2 m too high: on `room-2.pcap`, 108,901 points more than 2.3 m above the sensor in the first 5.8 s, against 2 with it.
 - **IMU.** De-duplicate and stamp as described in §7.
 - **Blind distance.** Set it to about 0.5 m, so returns from the mount and the operator are dropped.
 

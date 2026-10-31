@@ -40,7 +40,7 @@ docker run --rm -v "$PWD/data:/data" fast-lio-rs-fixtures /build/run_fastlio /da
   filter_size_surf=0.25 filter_size_map=0.25
 ```
 
-The results below were recorded before the unit's angle file was read out. Their input was decoded with Hesai's sample angle file, which needs `extrinsic_R=-1,0,0,0,-1,0,0,0,1` as well; the unit's own file needs none.
+The results below were recorded before the unit's angle file was read out, and before the decoder dropped the points of the 0.5 s after a wake (`lio --wake-hold 0` keeps them). Their input was decoded with Hesai's sample angle file, which needs `extrinsic_R=-1,0,0,0,-1,0,0,0,1` as well; the unit's own file needs none.
 
 The results on the first JT128 capture (the data stays local) are in [DEVIATIONS.md](../DEVIATIONS.md#floating-point-differences). In short, the two agree to the last bit in single precision until PCL's unspecified voxel order, or a fused multiply-add inside Eigen, changes a last bit. A chaotic stretch of the data then grows that difference, exactly as it does between two builds of FAST-LIO itself.
 

@@ -4,9 +4,9 @@
 //! for the JT128, including its integer angle steps of 1/25600° and its
 //! rounding. Frames are cut where the first-block azimuth wraps past the
 //! start angle (`GeneralParser::IsNeedFrameSplit`). See
-//! `docs/hesai_jt128_decoder.md` for the departures: spin-up packets are
-//! dropped, zero-range points are dropped, and IMU samples are split back out
-//! of merged runs.
+//! `docs/hesai_jt128_decoder.md` for the departures: spin-up packets and the
+//! points of the next half second are dropped, zero-range points are dropped,
+//! and IMU samples are split back out of merged runs.
 
 use crate::calib::{AngleCorrection, CHANNELS, Firetimes};
 use crate::packet::{Packet, PacketError};
@@ -42,6 +42,10 @@ pub struct DecoderConfig {
     pub imu_period: f64,
     /// Apply the firing-delay azimuth correction (on in the SDK's driver).
     pub firetime_azimuth_correction: bool,
+    /// Seconds of packet time after a spin-up whose points are dropped. For
+    /// about 0.23 s after its motor spins up from standby the JT128 reports
+    /// wrong ranges and reflectivity, unmarked in the packets. 0 keeps them.
+    pub wake_hold: f64,
 }
 
 impl Default for DecoderConfig {
@@ -50,6 +54,7 @@ impl Default for DecoderConfig {
             frame_start_azimuth: 0.0,
             imu_period: 0.005,
             firetime_azimuth_correction: true,
+            wake_hold: 0.5,
         }
     }
 }
@@ -64,6 +69,9 @@ pub enum Event {
 pub struct DecoderStats {
     pub packets: u64,
     pub spinup_packets: u64,
+    /// Packets within `wake_hold` after a spin-up: their points are dropped,
+    /// their IMU samples kept.
+    pub wake_packets: u64,
     pub sequence_gaps: u64,
     pub frames: u64,
     pub imu_samples: u64,
@@ -83,6 +91,9 @@ pub struct Decoder {
     cfg: DecoderConfig,
     channels: Vec<ChannelCalib>,
     have_firetimes: bool,
+    wake_hold_us: i64,
+    /// Packet time (µs) of the last spin-up packet, while its hold lasts.
+    wake_us: Option<i64>,
     start_azimuth: i32,
     last_azimuth: Option<i32>,
     last_last_azimuth: Option<i32>,
@@ -118,9 +129,11 @@ impl Decoder {
             0
         };
         Self {
+            wake_hold_us: (cfg.wake_hold.max(0.0) * 1e6).round() as i64,
             cfg,
             channels,
             have_firetimes: firetimes.is_some(),
+            wake_us: None,
             start_azimuth,
             last_azimuth: None,
             last_last_azimuth: None,
@@ -155,7 +168,24 @@ impl Decoder {
             .rem_euclid(36_000);
         if p.block_num >= 2 && !(1..=500).contains(&step) && !(35_500..36_000).contains(&step) {
             self.stats.spinup_packets += 1;
+            // A wake. The frame in progress, if any, ended at the standby, and
+            // frame splitting starts over as at the start of a stream.
+            self.finish_frame(out);
+            self.last_azimuth = None;
+            self.last_last_azimuth = None;
+            self.wake_us = Some(t_pkt_us);
             return Ok(());
+        }
+        // For 0.227 s after the last spin-up packet (the same on three
+        // captures), the up-looking channels read 3.7 m to a ceiling 1.7 m
+        // away and reflectivity is about 4 times too high. Only the point
+        // bytes differ. A clock that steps back ends the hold.
+        if let Some(w) = self.wake_us {
+            if (0..self.wake_hold_us).contains(&(t_pkt_us - w)) {
+                self.stats.wake_packets += 1;
+                return Ok(());
+            }
+            self.wake_us = None;
         }
 
         let az = i32::from(p.azimuth(0));

@@ -340,7 +340,7 @@ Each stage must see its items in order. The results are then bit-identical to `P
 | `output.downsampled_points`, `output.effective_features`, `output.map_points` | Health figures (§7) |
 | `lio::jt128_config()` | The settings `lio` uses for the JT128, as a `LioConfig` |
 | `lio::RayWriter` | Writes the §5.2 stream to any `Write` |
-| `pipeline.decoder_stats()` | Packets, spin-up packets, sequence gaps and IMU samples so far |
+| `pipeline.decoder_stats()` | Packets, spin-up packets, packets whose points were dropped after a wake, sequence gaps and IMU samples so far |
 
 **Threads and your process.** The parallel parts (matching, motion compensation and rays) use rayon's global pool. Configure that pool before the first frame if the host process needs it confined:
 - `rayon::ThreadPoolBuilder::new().num_threads(n).build_global()`;
@@ -403,11 +403,11 @@ docker run --rm --network host -v /etc/lio:/cal:ro -v /run/lio:/out fast-lio-rs 
 At exit, `lio` prints a summary to stderr. Taken from the first capture:
 
 ```text
-decoded 466361 packets (66 spin-up, 0 sequence gaps), 20795 IMU samples (11 recovered)
-frames: 1037 (first 1, IMU init 1, map init 1, updated 1034, skipped 0); rays: 114616923
-processing: 2.98 s for 103.93 s of data (34.9x real time); map holds 5465 points
-  busy: decoding 1.24 s, FAST-LIO 2.92 s, rays 1.11 s and writing 1.39 s, on three threads with 10 workers
-path: 9.51 m travelled, furthest 1.76 m from start, ends at [-0.269, -0.071, 0.536]
+decoded 466361 packets (66 spin-up, 2242 after a wake, 0 sequence gaps), 20795 IMU samples (11 recovered)
+frames: 1032 (first 1, IMU init 1, map init 1, updated 1029, skipped 0); rays: 114120935
+processing: 2.82 s for 103.43 s of data (36.7x real time); map holds 3436 points
+  busy: decoding 1.30 s, FAST-LIO 2.80 s, rays 1.08 s and writing 0.01 s, on three threads with 10 workers
+path: 9.48 m travelled, furthest 1.76 m from start, ends at [-0.249, -0.072, 0.562]
 ```
 
 A live run reports headroom instead of speed: how many times faster than real time its busiest stage was. Above about 2× is comfortable.
