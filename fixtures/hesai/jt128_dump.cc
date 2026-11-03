@@ -2,12 +2,15 @@
 // frames plus every IMU sample it emits, as CSV. Reference data for the
 // jt128 crate's decoder test.
 //
-// Usage: jt128_dump <pcap> <angle.csv> <firetimes.csv> <points.csv> <imu.csv> <first> <last>
+// Usage: jt128_dump <pcap> <angle.csv> <firetimes.csv> <points.csv> <imu.csv> <first> <last> [optical]
+//
+// "optical" turns on the SDK's optical-centre correction (distance_correction_flag).
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 
 #include "hesai_lidar_sdk.hpp"
@@ -15,8 +18,9 @@
 using namespace hesai::lidar;
 
 int main(int argc, char **argv) {
-  if (argc != 8) {
-    std::fprintf(stderr, "usage: %s <pcap> <angle.csv> <firetimes.csv> <points.csv> <imu.csv> <first> <last>\n", argv[0]);
+  const bool optical = argc == 9 && std::strcmp(argv[8], "optical") == 0;
+  if (argc != 8 && !optical) {
+    std::fprintf(stderr, "usage: %s <pcap> <angle.csv> <firetimes.csv> <points.csv> <imu.csv> <first> <last> [optical]\n", argv[0]);
     return 2;
   }
   DriverParam param;
@@ -25,6 +29,7 @@ int main(int argc, char **argv) {
   param.input_param.correction_file_path = argv[2];
   param.input_param.firetimes_path = argv[3];
   param.decoder_param.pcap_play_synchronization = false;
+  param.decoder_param.distance_correction_flag = optical;
   std::FILE *points = std::fopen(argv[4], "w");
   std::FILE *imu = std::fopen(argv[5], "w");
   const int first = std::atoi(argv[6]), last = std::atoi(argv[7]);

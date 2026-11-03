@@ -15,14 +15,14 @@ use jt128::{AngleCorrection, Decoder, DecoderConfig, Event, Firetimes, Frame, Im
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
-fn decode() -> (Vec<Frame>, Vec<ImuSample>) {
+fn decode(cfg: DecoderConfig) -> (Vec<Frame>, Vec<ImuSample>) {
     let angles = AngleCorrection::parse(
         &std::fs::read(format!("{ROOT}/data/angle_correction.csv")).unwrap(),
     )
     .unwrap();
     let fire =
         Firetimes::parse(&std::fs::read(format!("{ROOT}/data/firetimes.csv")).unwrap()).unwrap();
-    let mut dec = Decoder::new(&angles, Some(&fire), DecoderConfig::default());
+    let mut dec = Decoder::new(&angles, Some(&fire), cfg);
     let mut pcap = PcapReader::new(BufReader::new(
         File::open(format!("{ROOT}/data/room-2.pcap")).unwrap(),
     ))
@@ -41,15 +41,12 @@ fn decode() -> (Vec<Frame>, Vec<ImuSample>) {
     (frames, imu)
 }
 
-#[test]
-#[ignore = "needs data/room-2.pcap and the SDK reference CSVs in data/"]
-fn points_and_imu_match_the_sdk() {
-    let (frames, imu) = decode();
-
+/// Checks the points of each frame the SDK dumped to `data/<csv>` against ours.
+fn assert_points_match(frames: &[Frame], csv: &str) {
     // SDK points of each dumped frame, zero-range placeholders removed:
     // (x, y, z, time in ns).
     let mut sdk: BTreeMap<u32, Vec<(f32, f32, f32, i64)>> = BTreeMap::new();
-    let text = std::fs::read_to_string(format!("{ROOT}/data/sdk_points.csv")).unwrap();
+    let text = std::fs::read_to_string(format!("{ROOT}/data/{csv}")).unwrap();
     for line in text.lines().skip(1) {
         let f: Vec<&str> = line.split(',').collect();
         let (x, y, z): (f32, f32, f32) = (
@@ -91,13 +88,32 @@ fn points_and_imu_match_the_sdk() {
             max_t = max_t.max((dt - (w.3 - t_first)).abs());
         }
         eprintln!(
-            "SDK frame {frame_no}: {} points; max coordinate difference {max_xyz:e} m, max time difference {max_t} ns",
+            "{csv} frame {frame_no}: {} points; max coordinate difference {max_xyz:e} m, max time difference {max_t} ns",
             want.len()
         );
         assert_eq!(max_xyz, 0.0, "coordinates should match the SDK exactly");
         // dt_ms is f32 milliseconds within a 100 ms frame: 8 ns resolution at worst.
         assert!(max_t <= 8, "point times differ by up to {max_t} ns");
     }
+}
+
+#[test]
+#[ignore = "needs data/room-2.pcap and data/sdk_points_optical.csv"]
+fn points_match_the_sdk_with_its_optical_centre() {
+    // `jt128_dump ... optical`: the SDK's distance_correction_flag on, as in our default.
+    let (frames, _) = decode(DecoderConfig::default());
+    assert_points_match(&frames, "sdk_points_optical.csv");
+}
+
+#[test]
+#[ignore = "needs data/room-2.pcap and the SDK reference CSVs in data/"]
+fn points_and_imu_match_the_sdk() {
+    // The SDK's own default leaves its optical-centre correction off.
+    let (frames, imu) = decode(DecoderConfig {
+        optical_centre: false,
+        ..DecoderConfig::default()
+    });
+    assert_points_match(&frames, "sdk_points.csv");
 
     // IMU: the SDK's samples are ours minus the ones split back out of merged
     // runs, matched by value in order. Two kinds of SDK sample carry the next

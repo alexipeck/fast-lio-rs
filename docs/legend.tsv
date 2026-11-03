@@ -24,6 +24,7 @@ MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) 
 named pipe	computing		a FIFO special file (mkfifo) one process writes and another reads; one way to stream lio's rays to another program	docs/integration.md
 NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
 OpenMP	tool	Open Multi-Processing	C/C++ pragma-based threading; FAST-LIO uses it for its correspondence loop, enabled by its CMake only on x86 (MP_EN, 3 threads with more than 4 cores)	FAST_LIO CMakeLists.txt
+optical centre	domain		Where the JT128 measures a return from: (-7.6, 13.67, 12.74) mm from the axis origin with the head at azimuth 0, turning with the head. Hesai's SDK adds it to refer points to the axis origin only with distance_correction_flag on (off by default); the decoder adds it by default (DecoderConfig::optical_centre, lio --optical-centre), moving each point beyond 0.09 m by 2.0 cm	docs/hesai_jt128_decoder.md
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
 PCL	tool	Point Cloud Library	C++ library FAST-LIO uses for point types and VoxelGrid downsampling; only the fixtures image uses it	fixtures/README.md
 pinning	computing		Restricting a thread to chosen CPUs (CPU affinity, sched_setaffinity). lio --cpus pins the process, --pin <stage>=<list> one stage; Linux only	crates/lio/src/cpus.rs

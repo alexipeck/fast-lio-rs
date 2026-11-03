@@ -6,7 +6,8 @@
 //! start angle (`GeneralParser::IsNeedFrameSplit`). See
 //! `docs/hesai_jt128_decoder.md` for the departures: spin-up packets and the
 //! points of the next half second are dropped, zero-range points are dropped,
-//! and IMU samples are split back out of merged runs.
+//! IMU samples are split back out of merged runs, and the SDK's optical-centre
+//! correction is on by default.
 
 use crate::calib::{AngleCorrection, CHANNELS, Firetimes};
 use crate::packet::{Packet, PacketError};
@@ -18,6 +19,10 @@ const CIRCLE: i32 = 36_000 * 256;
 const RETURN_MODE_MULTI: u8 = 0x39;
 const BLOCK_NS_OFFSET1: i64 = -1_888_000;
 const BLOCK_NS_OFFSET2: i64 = -111_000;
+/// The optical centre with the head at azimuth 0 (m): 13.67 mm towards the
+/// connector, 7.6 mm aside and 12.74 mm up from the axis origin (JT128 manual,
+/// Figure 5; the SDK's `Udp1_4Parser` constructor).
+const OPTICAL_CENTRE: [f32; 3] = [-0.0076, 0.01367, 0.01274];
 
 /// The SDK's `doubleToInt`: adds 1/16, then truncates toward zero.
 fn double_to_int(v: f64) -> i32 {
@@ -46,6 +51,11 @@ pub struct DecoderConfig {
     /// about 0.23 s after its motor spins up from standby the JT128 reports
     /// wrong ranges and reflectivity, unmarked in the packets. 0 keeps them.
     pub wake_hold: f64,
+    /// Measure returns beyond 0.09 m from the axis origin instead of the
+    /// optical centre, which turns with the head 15.6 mm off the axis: the
+    /// SDK's `distance_correction_flag`, off by default there. Moves each such
+    /// point by 2.0 cm.
+    pub optical_centre: bool,
 }
 
 impl Default for DecoderConfig {
@@ -55,6 +65,7 @@ impl Default for DecoderConfig {
             imu_period: 0.005,
             firetime_azimuth_correction: true,
             wake_hold: 0.5,
+            optical_centre: true,
         }
     }
 }
@@ -84,7 +95,34 @@ struct ChannelCalib {
     /// sin and cos of the elevation, which is fixed per channel.
     sin_el: f32,
     cos_el: f32,
+    /// sin and cos of the azimuth offset alone, for the optical centre.
+    sin_az: f32,
+    cos_az: f32,
     firetime_ns: i32,
+}
+
+impl ChannelCalib {
+    /// `GeneralParser::GetDistanceCorrection` for the JT128 (`OpticalCenter`):
+    /// a return `d` along the beam from the optical centre, with the head at
+    /// azimuth 0, as an azimuth offset, the sin and cos of an elevation, and a
+    /// distance from the axis origin. The SDK truncates the two angles.
+    fn to_axis_origin(&self, d: f32) -> (i32, (f32, f32), f32) {
+        let [cx, cy, cz] = OPTICAL_CENTRE;
+        let x = d * (self.cos_el * self.sin_az) + cx;
+        let y = d * (self.cos_el * self.cos_az) + cy;
+        let z = d * self.sin_el + cz;
+        let r = (x * x + y * y + z * z).sqrt();
+        // The SDK calls atan2f and asinf, whose last bit is the C library's:
+        // glibc 2.35 and macOS put about 1% of these angles a step apart.
+        // Taken in double and rounded, they are correctly rounded everywhere
+        // and match the SDK on glibc 2.43 bit for bit.
+        let atan2 = f64::from(x).atan2(f64::from(y)) as f32;
+        let asin = f64::from(z / r).asin() as f32;
+        // Radians to SDK units: two float products, then a division by the double π.
+        let fine = |a: f32| (f64::from(a * 18_000.0 * 256.0) / std::f64::consts::PI) as i32;
+        let elevation = circle_revise(fine(asin));
+        (circle_revise(fine(atan2)), sin_cos(elevation), r)
+    }
 }
 
 pub struct Decoder {
@@ -114,10 +152,14 @@ impl Decoder {
             .map(|ch| {
                 let elevation = double_to_int(f64::from(angles.elevation[ch] * FINE as f32));
                 let (sin_el, cos_el) = sin_cos(circle_revise(elevation));
+                let azimuth = double_to_int(f64::from(angles.azimuth[ch] * FINE as f32));
+                let (sin_az, cos_az) = sin_cos(circle_revise(azimuth));
                 ChannelCalib {
-                    azimuth: double_to_int(f64::from(angles.azimuth[ch] * FINE as f32)),
+                    azimuth,
                     sin_el,
                     cos_el,
+                    sin_az,
+                    cos_az,
                     firetime_ns: firetimes.map_or(0, |f| f.ns[ch]),
                 }
             })
@@ -229,9 +271,17 @@ impl Decoder {
                     let corr_deg = f64::from(c.firetime_ns) * speed * 6e-9;
                     azimuth += (sign * f64::from(double_to_int(corr_deg * f64::from(FINE)))) as i32;
                 }
-                azimuth = circle_revise(azimuth + c.azimuth);
+                // The SDK applies the optical centre to the channel's own angles,
+                // so it turns with the head.
+                let (offset, (sin_el, cos_el), distance) =
+                    if self.cfg.optical_centre && f64::from(distance) > 0.09 {
+                        c.to_axis_origin(distance)
+                    } else {
+                        (c.azimuth, (c.sin_el, c.cos_el), distance)
+                    };
+                azimuth = circle_revise(azimuth + offset);
                 let (sin_az, cos_az) = sin_cos(azimuth);
-                let xy = distance * c.cos_el;
+                let xy = distance * cos_el;
                 let t_ns = t_pkt_us * 1000
                     + if self.have_firetimes {
                         block_offset + i64::from(c.firetime_ns)
@@ -241,7 +291,7 @@ impl Decoder {
                 let point = Point {
                     x: xy * sin_az,
                     y: xy * cos_az,
-                    z: distance * c.sin_el,
+                    z: distance * sin_el,
                     intensity: f32::from(refl),
                     dt_ms: 0.0,
                     range: distance,
@@ -340,5 +390,97 @@ impl Decoder {
         out.push(Event::Imu(sample));
         self.stats.imu_samples += 1;
         self.imu_last = Some((t, values, sample));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A packet of two blocks 0.4° apart with no optional sections and the motor
+    /// stopped: one return of `distance` counts (4 mm) on `ch` in the first.
+    fn packet(azimuth: u16, ch: usize, distance: u16) -> Vec<u8> {
+        let block = 2 + CHANNELS * 3;
+        let tail = 12 + 2 * block + 4;
+        let mut b = vec![0; tail + 26 + 4];
+        b[..12].copy_from_slice(&[0xEE, 0xFF, 1, 4, 137, 0, CHANNELS as u8, 2, 0, 4, 1, 0]);
+        b[12..14].copy_from_slice(&azimuth.to_le_bytes());
+        b[14 + ch * 3..16 + ch * 3].copy_from_slice(&distance.to_le_bytes());
+        b[12 + block..14 + block].copy_from_slice(&(azimuth + 40).to_le_bytes());
+        b[tail + 12] = 0x37;
+        b
+    }
+
+    /// The points of one packet per head azimuth (0.01°), as one frame.
+    fn decode(
+        angles: &AngleCorrection,
+        optical_centre: bool,
+        ch: usize,
+        distance: u16,
+        heads: &[u16],
+    ) -> Vec<Point> {
+        let cfg = DecoderConfig {
+            optical_centre,
+            ..DecoderConfig::default()
+        };
+        let mut dec = Decoder::new(angles, None, cfg);
+        let mut out = Vec::new();
+        for &h in heads {
+            dec.push(&packet(h, ch, distance), &mut out).unwrap();
+        }
+        dec.flush(&mut out);
+        let [Event::Frame(f)] = &out[..] else {
+            panic!("{out:?}");
+        };
+        f.points.clone()
+    }
+
+    fn straight() -> AngleCorrection {
+        AngleCorrection {
+            elevation: vec![0.0; CHANNELS],
+            azimuth: vec![0.0; CHANNELS],
+            hash: None,
+            hash_matches: None,
+        }
+    }
+
+    fn assert_at(p: &Point, want: [f32; 3]) {
+        let xyz = [p.x, p.y, p.z];
+        assert!(
+            (0..3).all(|k| (xyz[k] - want[k]).abs() < 1e-5),
+            "{xyz:?} {want:?}"
+        );
+        assert!((p.range - (p.x * p.x + p.y * p.y + p.z * p.z).sqrt()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn optical_centre_turns_with_the_head() {
+        let [o0, o1, o2] = OPTICAL_CENTRE;
+        let on = decode(&straight(), true, 0, 500, &[0, 9000]);
+        // Head at 0°: 2 m along +y from the optical centre.
+        assert_at(&on[0], [o0, 2.0 + o1, o2]);
+        // Head at 90°: the offset turned a quarter clockwise, (x, y) -> (y, -x).
+        assert_at(&on[1], [2.0 + o1, -o0, o2]);
+        // Off, and on for a return within 0.09 m: from the optical centre.
+        let off = decode(&straight(), false, 0, 500, &[0, 9000]);
+        assert_at(&off[0], [0.0, 2.0, 0.0]);
+        assert_at(&off[1], [2.0, 0.0, 0.0]);
+        let near = decode(&straight(), true, 0, 22, &[0]);
+        assert_at(&near[0], [0.0, 0.088, 0.0]);
+    }
+
+    #[test]
+    fn optical_centre_is_added_along_the_beam() {
+        // A channel aimed 30° anticlockwise of the head and 10° up, 3 m, head at 120°:
+        // the centre is added with the head at 0°, then the sum turned with the head.
+        let mut angles = straight();
+        angles.elevation[5] = 10.0;
+        angles.azimuth[5] = -30.0;
+        let p = decode(&angles, true, 5, 750, &[12_000])[0];
+        let (se, ce) = 10f32.to_radians().sin_cos();
+        let (sa, ca) = (-30f32).to_radians().sin_cos();
+        let v = [0, 1, 2].map(|k| [3.0 * ce * sa, 3.0 * ce * ca, 3.0 * se][k] + OPTICAL_CENTRE[k]);
+        let (sh, ch) = 120f32.to_radians().sin_cos();
+        assert_at(&p, [v[0] * ch + v[1] * sh, v[1] * ch - v[0] * sh, v[2]]);
     }
 }

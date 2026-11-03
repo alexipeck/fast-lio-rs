@@ -181,10 +181,13 @@ x = d*cos(el)*sin(az);  y = d*cos(el)*cos(az);  z = d*sin(el)
 
 On the housing (JT128 user manual, §1.3): azimuth 0, and so +Y, points toward the side with the connector. Azimuth increases clockwise seen from above, the way the head spins, so +X is 90° clockwise from the connector. Z is the dome's axis. This holds only with the unit's own angle file. The offsets in that file include the unit's encoder zero, so another unit's file turns the whole cloud: Hesai's sample file turns it about 170° on the first unit.
 
-**Optional optical-centre correction** (`distance_correction_flag`, off by default)
-- Applies only when `d > 0.09 m`.
-- Computes `p = d*u(az,el) + c` with `c = (−0.0076, 0.01367, 0.01274)` m, then takes `d = |p|` and recomputes the angles.
+**Optical-centre correction** (`distance_correction_flag`, off by default in the SDK; on by default here, `DecoderConfig::optical_centre`, `lio --optical-centre`)
+- The SDK applies it only when `d > 0.09 m`.
+- Computes `p = d*u(az_corr, el_corr) + c` from the channel's own angles, with `c = (−0.0076, 0.01367, 0.01274)` m: the optical centre with the head at azimuth 0 (JT128 manual, Figure 5). It then takes `d = |p|` and truncates the angles of `p` to 1/25600° (`GeneralParser::GetDistanceCorrection`). The head's azimuth is added after, so the centre turns with the head. Each point moves by |c| = 2.0 cm.
 - The JT128 constructor sets `c` in `udp1_4_parser.h`.
+- Off, a point is measured from the optical centre, which circles the axis 15.6 mm out and 12.74 mm above the origin. On, it is measured from the origin of the manual's frame (§1.3–1.4), on the axis 47.84 mm above the base.
+- The SDK takes those angles with `atan2f` and `asinf`, whose last bit belongs to the C library. Between glibc 2.35 and macOS, about 1% of the truncated angles land a step (1/25600°) apart. The decoder takes them in double and rounds to float, which is correctly rounded on every platform and matches the SDK on glibc 2.43 bit for bit (`fixtures/README.md`).
+- Decoding costs 26.6 ns a point with it on, against 9.3 off (Apple M4, `room-2.pcap`): 2.9% of one core at the JT128's point rate.
 
 **Notes**
 - The SDK rounds angles to 1/25600° and looks up sin/cos in two 9.2 M-entry float tables, about 74 MB in total. Compute sin/cos directly in Rust.
@@ -300,7 +303,7 @@ Items 1–4 are answered in §11 from `room-2.pcap`, and so are the IMU's axes: 
 - Item 5: answered by the manual. +Y points toward the connector (§5, "Axes").
 - Item 6 needs a 20 Hz capture. 20 Hz is not planned for now (2026-10-29).
 
-The decoder reproduces Hesai SDK 2.0's points bit for bit, and all of its IMU samples (`fixtures/README.md`, "Hesai SDK reference").
+The decoder reproduces Hesai SDK 2.0's points bit for bit, with its optical-centre correction off and on, and all of its IMU samples (`fixtures/README.md`, "Hesai SDK reference").
 
 ## 11. Measured on `room-2.pcap`
 

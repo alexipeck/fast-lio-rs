@@ -121,9 +121,9 @@ All rays and the path are in one world frame per run.
 | Field | Type | Meaning |
 |---|---|---|
 | `t` | f64 | The point's time, in seconds, on the sensor clock |
-| `origin` | f32 ×3 | The LiDAR's position in the world frame at `t`, in metres |
+| `origin` | f32 ×3 | The LiDAR's position in the world frame at `t`, in metres: its axis origin, on the rotation axis 47.84 mm above the base |
 | `direction` | f32 ×3 | The unit beam direction in the world frame |
-| `range` | f32 | The measured range, in metres. The point is at `origin + range · direction` |
+| `range` | f32 | The measured range, in metres, from that origin (from the optical centre with `--optical-centre 0`). The point is at `origin + range · direction` |
 | `intensity` | f32 | Hesai's reflectivity, 0–255 |
 
 **How the pose at `t` is found:**

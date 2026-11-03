@@ -11,11 +11,12 @@ These fix memory-safety defects in the C++. They don't change results for inputs
 ## JT128 input (FAST-LIO has no JT128 handler)
 
 - **Preprocessing** follows FAST-LIO's Velodyne/Ouster handlers (`src/preprocess.cpp`): keep every `point_filter_num`-th point in arrival order, then drop points within `blind`. Each point's time comes from the decoder, so the yaw-based time estimate those handlers fall back on is never used.
-- **The decoder departs from Hesai's SDK in four places**, all in `docs/hesai_jt128_decoder.md`:
+- **The decoder departs from Hesai's SDK in five places**, all in `docs/hesai_jt128_decoder.md`:
   - Spin-up packets, whose block azimuths don't advance, are dropped.
   - The points of the 0.5 s after a spin-up are dropped, while the JT128 reads wrong after waking (`--wake-hold`). Their IMU samples are kept.
   - Zero-range points (no return) are dropped.
   - IMU samples that the SDK's value comparison would merge are split back out.
+  - The SDK's optical-centre correction is on (`--optical-centre`; the SDK leaves it off), so each point is measured from the axis origin rather than from the optical centre, which turns with the head. Its two angles are correctly rounded, as the SDK's are on glibc 2.43.
 - **IMU timestamps are packet arrival times.** The JT128's IMU counter field is always 0, so samples are stamped with the time of the packet that first carries them. The resulting latency can be offset with `--time-offset` (`time_offset_lidar_to_imu`).
 
 ## Outputs FAST-LIO doesn't have

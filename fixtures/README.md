@@ -96,3 +96,12 @@ On `room-2.pcap`, SDK frames 100 and 101 come out the same: 227,318 points with 
 - every sample whose value first arrives in the packet that starts a new frame, on which the SDK finishes the previous one.
 
 We use the time of the first packet that carries the value.
+
+A last argument `optical` turns on the SDK's optical-centre correction (`distance_correction_flag`), which the decoder applies by default. Its angles come from `atan2f` and `asinf`, so they depend on the C library: run under the image's glibc 2.35, 1,824 of frame 100's 113,685 points land one 1/25600° step from ours, at most 3.8 µm away. Under glibc 2.43, whose two functions are correctly rounded like the decoder's, both frames match bit for bit. That dump was made by copying the image's `jt128_dump` into an Arch Linux ARM container (glibc 2.43) and running it there:
+
+```bash
+docker run --rm -v "$PWD/data:/data" -v "$PWD/sdk:/o" <glibc-2.43 image> /o/jt128_dump /data/room-2.pcap \
+  /data/angle_correction.csv /data/firetimes.csv /data/sdk_points_optical.csv /tmp/imu.csv 100 101 optical
+```
+
+`sdk_reference` compares `sdk_points.csv` with the decoder's optical centre off and `sdk_points_optical.csv` with it on.
