@@ -34,6 +34,23 @@ pub struct Point {
     pub dt_ms: f32,
     /// Measured range, metres.
     pub range: f32,
+    /// The JT128's confidence byte (manual J01 §3.1; the SDK's weight factor): bits 7–6 the
+    /// cover lens's contamination level, bits 5–0 the discrete-noise level. 0 when the packets
+    /// carry none (status flags bit 5 clear).
+    pub confidence: u8,
+}
+
+impl Point {
+    /// Bits 5–0 of [`Point::confidence`], 0–63: the higher, the more likely the return is a
+    /// discrete noise point (rain, dust, a weak or split return).
+    pub fn noise_level(&self) -> u8 {
+        self.confidence & 0x3F
+    }
+
+    /// Bits 7–6 of [`Point::confidence`], 0–3: how dirty the cover lens is.
+    pub fn dirt_level(&self) -> u8 {
+        self.confidence >> 6
+    }
 }
 
 /// One sweep of points, cut at the frame-start azimuth.

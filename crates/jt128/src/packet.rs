@@ -42,6 +42,10 @@ const FLAG_SEQ: u8 = 0x01;
 const FLAG_IMU: u8 = 0x02;
 const FLAG_FUNC_SAFETY: u8 = 0x04;
 const FLAG_SIGNATURE: u8 = 0x08;
+/// Per-channel bytes after reflectivity, in flag order. The JT128 manual reserves bit 4 and
+/// names bit 5 the confidence byte; the SDK calls them confidence and weight factor.
+const FLAG_UNIT_BIT4: u8 = 0x10;
+const FLAG_CONFIDENCE: u8 = 0x20;
 
 /// Raw IMU fields from the packet trailer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +155,15 @@ impl<'a> Packet<'a> {
     pub fn channel(&self, block: usize, channel: usize) -> (u16, u8) {
         let o = self.block_start(block) + 2 + channel * self.unit_size;
         (le16(self.data, o), self.data[o + 2])
+    }
+
+    /// The confidence byte of one channel, when the status flags carry it (bit 5): bits 7–6
+    /// the cover lens's contamination level (0–3), bits 5–0 the discrete-noise level (0–63).
+    pub fn confidence(&self, block: usize, channel: usize) -> Option<u8> {
+        (self.flags & FLAG_CONFIDENCE != 0).then(|| {
+            let o = self.block_start(block) + 2 + channel * self.unit_size + 3;
+            self.data[o + usize::from(self.flags & FLAG_UNIT_BIT4 != 0)]
+        })
     }
 
     pub fn operational_mode(&self) -> u8 {

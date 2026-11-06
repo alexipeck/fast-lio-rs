@@ -60,8 +60,8 @@ The packet is packed with no padding and is little-endian throughout, except one
 | `0x02` | IMU present | +22 bytes in trailer |
 | `0x04` | function safety present | +17 bytes in trailer |
 | `0x08` | signature present | +32 bytes at end |
-| `0x10` | confidence byte per point | +1 byte per channel unit |
-| `0x20` | weight-factor byte per point | +1 byte per channel unit |
+| `0x10` | SDK: confidence byte per point. JT128 manual: reserved | +1 byte per channel unit |
+| `0x20` | JT128 manual: confidence byte per point. SDK: weight factor | +1 byte per channel unit |
 | `0x40` | env-light byte per point | +1 byte per channel unit |
 
 Read `L`, `B` and the flags from every packet. Don't hard-code them. The SDK sizes its buffers for at most 400 points per packet and 4000 packets per frame.
@@ -76,11 +76,11 @@ Read `L`, `B` and the flags from every packet. Don't hard-code them. The SDK siz
 |---|---|
 | 2 | `u16` distance (× distance unit; 0 = no return) |
 | 1 | `u8` reflectivity |
-| 0–3 | optional, in this order: confidence (`0x10`), weight factor (`0x20`), env light (`0x40`) |
+| 0–3 | optional, in this order: the SDK's confidence (`0x10`), the JT128's confidence byte (`0x20`, the SDK's weight factor), env light (`0x40`) |
 
 `unit_size = 3 + popcount(flags & 0x70)`.
 
-On JT128 the weight-factor byte packs two fields: bits 7–6 are the **dirty level** and bits 5–0 are the **noise level**. These can be used to filter points.
+On JT128 the `0x20` byte is the manual's **confidence byte** (J01-en-250920 §3.1). It packs two fields: bits 7–6 are the cover lens's **contamination level** (0–3) and bits 5–0 the **discrete-noise level** (0–63), higher for a return more likely to be noise (rain, fog, dust, exhaust). The decoder carries it as `Point::confidence`, with `noise_level()` and `dirt_level()`, 0 when the flag is clear; it filters nothing.
 
 ### Trailer, in order
 
@@ -313,7 +313,7 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 |---|---|
 | Packets | 466,361 UDP datagrams of 1100 bytes, sensor 192.168.50.201:2368 to host :2368, none other |
 | Header | v1.4, status-info version 137 (JT128), `L` = 128, `B` = 2, distance unit 4 mm, echo count 0, echo num 1 |
-| Flags | `0x23`: sequence number, IMU, weight-factor byte. So the channel unit is 4 bytes |
+| Flags | `0x23`: sequence number, IMU, confidence byte. So the channel unit is 4 bytes |
 | Return / mode | `0x37` strongest (single return); operational mode 0 |
 | Motor speed | 5985–5993 raw, i.e. 598.5–599.3 RPM at 0.1 RPM per unit |
 | Sequence | 0 gaps, 0 lost |
@@ -341,6 +341,7 @@ A 104 s indoor capture. The first 6.8 s are stationary; the rest is handheld.
 
 ```rust
 pub struct ImuSample { pub t: f64, pub acc: [f64; 3], pub gyro: [f64; 3] }    // s, g or m/s², rad/s
-pub struct Point     { pub x: f32, pub y: f32, pub z: f32, pub intensity: f32, pub dt_ms: f32 }
+pub struct Point     { pub x: f32, pub y: f32, pub z: f32, pub intensity: f32, pub dt_ms: f32,
+                       pub range: f32, pub confidence: u8 }                 // m; confidence byte, 0 if none
 pub struct Frame     { pub t0: f64, pub points: Vec<Point> }                    // t0 in s, sensor clock
 ```

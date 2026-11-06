@@ -295,6 +295,7 @@ impl Decoder {
                     intensity: f32::from(refl),
                     dt_ms: 0.0,
                     range: distance,
+                    confidence: p.confidence(b, ch).unwrap_or(0),
                 };
                 self.frame.push((t_ns, point));
             }
@@ -400,12 +401,20 @@ mod tests {
     /// A packet of two blocks 0.4° apart with no optional sections and the motor
     /// stopped: one return of `distance` counts (4 mm) on `ch` in the first.
     fn packet(azimuth: u16, ch: usize, distance: u16) -> Vec<u8> {
-        let block = 2 + CHANNELS * 3;
+        packet_with(azimuth, ch, distance, 0, &[])
+    }
+
+    /// As [`packet`], with status `flags` and the bytes after reflectivity they call for.
+    fn packet_with(azimuth: u16, ch: usize, distance: u16, flags: u8, extra: &[u8]) -> Vec<u8> {
+        let unit = 3 + extra.len();
+        let block = 2 + CHANNELS * unit;
         let tail = 12 + 2 * block + 4;
         let mut b = vec![0; tail + 26 + 4];
-        b[..12].copy_from_slice(&[0xEE, 0xFF, 1, 4, 137, 0, CHANNELS as u8, 2, 0, 4, 1, 0]);
+        b[..12].copy_from_slice(&[0xEE, 0xFF, 1, 4, 137, 0, CHANNELS as u8, 2, 0, 4, 1, flags]);
         b[12..14].copy_from_slice(&azimuth.to_le_bytes());
-        b[14 + ch * 3..16 + ch * 3].copy_from_slice(&distance.to_le_bytes());
+        let o = 14 + ch * unit;
+        b[o..o + 2].copy_from_slice(&distance.to_le_bytes());
+        b[o + 3..o + unit].copy_from_slice(extra);
         b[12 + block..14 + block].copy_from_slice(&(azimuth + 40).to_le_bytes());
         b[tail + 12] = 0x37;
         b
@@ -467,6 +476,33 @@ mod tests {
         assert_at(&off[1], [2.0, 0.0, 0.0]);
         let near = decode(&straight(), true, 0, 22, &[0]);
         assert_at(&near[0], [0.0, 0.088, 0.0]);
+    }
+
+    #[test]
+    fn confidence_byte_is_carried() {
+        // Flags 0x20 (the captured unit): one byte after reflectivity. 0x30: after bit 4's byte.
+        for (flags, extra) in [(0x20, &[0xC5][..]), (0x30, &[0x11, 0xC5][..])] {
+            let cfg = DecoderConfig {
+                optical_centre: false,
+                ..DecoderConfig::default()
+            };
+            let mut dec = Decoder::new(&straight(), None, cfg);
+            let mut out = Vec::new();
+            dec.push(&packet_with(0, 7, 500, flags, extra), &mut out)
+                .unwrap();
+            dec.flush(&mut out);
+            let [Event::Frame(f)] = &out[..] else {
+                panic!("{out:?}");
+            };
+            let p = f.points[0];
+            assert_eq!(p.range, 2.0);
+            assert_eq!(
+                (p.confidence, p.noise_level(), p.dirt_level()),
+                (0xC5, 5, 3)
+            );
+        }
+        // Without the flag, 0.
+        assert_eq!(decode(&straight(), true, 0, 500, &[0])[0].confidence, 0);
     }
 
     #[test]

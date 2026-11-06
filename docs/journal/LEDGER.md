@@ -487,3 +487,20 @@ The UAV project's cylinder walk (`cylinder-2`, 2 Nov) fitted tighter with the op
 - **decision** — The decoder takes both angles in double and rounds to float: correctly rounded, the same on the Mac, lappy and the ROCK, and the SDK's answer on glibc 2.43.
 - **test** — `sdk_reference`: correction off against `sdk_points.csv` (the SDK's default) and on against `sdk_points_optical.csv` (the image's `jt128_dump` run under glibc 2.43): both frames bit for bit, 227,318 points, times within 4 ns; IMU unchanged. Against the glibc 2.35 run, 1,824 and 1,646 points a step apart. New unit tests `optical_centre_turns_with_the_head` (head at 0° and 90°, the switch off, a 0.088 m return left alone) and `optical_centre_is_added_along_the_beam` (a channel at −30° and 10°, head at 120°). Workspace: 29 tests pass with the ignored capture tests; `replay` bit-identical across runs and thread counts; clippy and fmt clean.
 - **test** — Cost: decoding takes 26.6 ns a point against 9.3 (M4, room-2, payloads in memory), 2.9% of one core at the JT128's point rate. `lio replay room-2.pcap`: decoding is now the busiest thread (3.41 s against FAST-LIO's 2.74 s), 29.7× real time against 41.0×; path 9.29 m against 9.48 m, map 3,448 points against 3,436; the two paths 1.7 cm RMS apart, 2.4 cm at most.
+
+## 2026-11-06
+
+### 09:40 · The decoder carries the JT128's confidence byte
+`session 7d9b4589` (the UAV project's) · `main` @ `ad3717f` · transcript in the UAV project's journal
+
+The UAV project tested a research handoff on its recordings (its journal, 6 Nov 02:43). It found that the confidence byte is present on every return and that its noise level is a useful filter. This decoder, and so jt128-bag, glim-cloud and `flight`, read past the byte. Alexi, asked whether to carry it through the decoder, jt128-bag and glim-cloud: "Yes, add it". Asked whether to commit it here: "Yes, commit it".
+
+- **change** — The confidence byte reaches `Point`:
+  - `Packet::confidence(block, channel)` returns the byte when the status flags' bit 5 (0x20) is set, after bit 4's byte when that is set too;
+  - `Point::confidence: u8` is 0 when the packets carry none, with `noise_level()` (bits 5–0) and `dirt_level()` (bits 7–6);
+  - the decoder fills it and filters nothing by it;
+  - the decoder spec names bit 5 after the JT128 manual (Confidence; the SDK's weight factor), and its interface sketch now lists `range` and `confidence`;
+  - the legend gains confidence byte, noise level and dirt level.
+- **test** — The new unit test `confidence_byte_is_carried` covers flags 0x20 and 0x30, and 0 without the flag. All 7 unit tests and the 4 room-2 tests pass. `sdk_reference` is still bit for bit with the SDK, with the optical centre off and on.
+- **test** — In the UAV project, jt128-bag built on this change: on 10 s of `cylinder-2` (11,286,699 points), its points' joint (reflectivity, confidence) counts equal those read from the raw bytes of the same packets exactly.
+- **test** — Cost, room-2 decoded from memory on an M4, best of 7 per run, three runs alternating: 34.1–35.8 ns a point against 34.1–36.1 at `ad3717f`, with identical output. `Point` grows from 24 to 28 bytes.

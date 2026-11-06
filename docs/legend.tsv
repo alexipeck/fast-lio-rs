@@ -5,7 +5,9 @@ back-pressure	computing		a slow consumer slowing its producer: lio's stages are 
 big.LITTLE	computing		CPU with fast and slow cores (Apple M4: 4+6; RK3588: 4×A76 + 4×A55). lio --threads set to the fast-core count uses far less CPU for nearly the same speed	crates/lio/src/main.rs
 boxplus	method	manifold plus operator	Applies a tangent-space increment to a manifold state; boxminus is the inverse difference	
 catkin	tool	ROS1 build system	Build system used by FAST_LIO main branch; ROS2 replaced it with ament/colcon	
+confidence byte	format		The JT128's optional per-return byte after reflectivity, present when the packet's status flags have bit 5 (0x20) set (the captured unit: flags 0x23): bits 7-6 the cover lens's contamination level (0-3), bits 5-0 the discrete-noise level (0-63) (manual J01-en-250920 §3.1). Hesai's SDK calls it the weight factor. The decoder carries it as Point::confidence, 0 when absent	docs/hesai_jt128_decoder.md
 CustomMsg	format	livox_ros_driver/CustomMsg	Livox per-point packet message (offset_time, line, tag); parsed by Preprocess::avia_handler for Avia/Horizon/Mid-360	
+dirt level	metric		Bits 7-6 of the JT128's confidence byte, 0-3 (Point::dirt_level): the cover lens's contamination as the sensor judges it for that return	docs/hesai_jt128_decoder.md
 distroless	tool		Google's minimal container base images; lio's runtime image uses gcr.io/distroless/cc-debian12 (glibc and libgcc, no shell), about 50 MB with the binary	Dockerfile
 extrinsic	domain	LiDAR-to-IMU rigid transform	offset_R_L_I / offset_T_L_I in the state; seeded from mapping/extrinsic_R,T and optionally refined online when extrinsic_est_en is true	
 FAST-LIO	tool	Fast LiDAR-Inertial Odometry	hku-mars LiDAR-inertial odometry (FAST-LIO2 in its current form); the algorithm this repo implements, pinned at commit 7cc4175	README.md
@@ -23,6 +25,7 @@ LIORAYS1	format	ray file magic	First 8 bytes of a lio --rays file; then per fram
 MTK	tool	Manifold Toolkit	Template/macro layer under IKFoM (MTK_BUILD_MANIFOLD) that composes vect, SO3 and S2 into one state type with boxplus/boxminus	
 named pipe	computing		a FIFO special file (mkfifo) one process writes and another reads; one way to stream lio's rays to another program	docs/integration.md
 NEON	computing	Arm Advanced SIMD	The ARM vector instruction set; Eigen's NEON kernels fuse some double-precision multiply-adds	DEVIATIONS.md
+noise level	metric		Bits 5-0 of the JT128's confidence byte, 0-63 (Point::noise_level): the higher, the more likely the return is a discrete noise point (rain, fog, dust, exhaust, a weak return). Not a calibrated probability; the decoder filters nothing by it	docs/hesai_jt128_decoder.md
 OpenMP	tool	Open Multi-Processing	C/C++ pragma-based threading; FAST-LIO uses it for its correspondence loop, enabled by its CMake only on x86 (MP_EN, 3 threads with more than 4 cores)	FAST_LIO CMakeLists.txt
 optical centre	domain		Where the JT128 measures a return from: (-7.6, 13.67, 12.74) mm from the axis origin with the head at azimuth 0, turning with the head. Hesai's SDK adds it to refer points to the axis origin only with distance_correction_flag on (off by default); the decoder adds it by default (DecoderConfig::optical_centre, lio --optical-centre), moving each point beyond 0.09 m by 2.0 cm	docs/hesai_jt128_decoder.md
 PCD	format	Point Cloud Data	PCL's point cloud file format; FAST-LIO writes the accumulated map to PCD/scans.pcd when pcd_save_en is set	
